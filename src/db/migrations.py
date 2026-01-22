@@ -266,11 +266,96 @@ async def _migration_v4(conn) -> None:
         pass
 
 
-MIGRATIONS: list[tuple[int, Callable[[object], Awaitable[None]]]] = [
+async def _migration_v5(conn) -> None:
+    """
+    Users table compatibility:
+
+    Current code expects users to have:
+      - discord_user_id
+      - telegram_user_id
+      - display_name
+
+    Older DBs only stored platform ids in user_identities.
+    This migration adds missing columns + backfills best-effort.
+    """
+    if not await _table_exists(conn, "users"):
+        return
+
+    # Add missing columns (TEXT to match current repo code using str(...))
+    if not await _column_exists(conn, "users", "discord_user_id"):
+        await conn.execute("ALTER TABLE users ADD COLUMN discord_user_id TEXT;")
+
+    if not await _column_exists(conn, "users", "telegram_user_id"):
+        await conn.execute("ALTER TABLE users ADD COLUMN telegram_user_id TEXT;")
+
+    if not await _column_exists(conn, "users", "display_name"):
+        await conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT;")
+
+    # Backfill from user_identities if it exists
+    if await _table_exists(conn, "user_identities"):
+        # Discord backfill
+        await conn.execute(
+            """
+            UPDATE users
+               SET discord_user_id = (
+                     SELECT ui.platform_user_id
+                       FROM user_identities ui
+                      WHERE ui.user_id = users.id
+                        AND ui.platform = 'discord'
+                      LIMIT 1
+                   )
+             WHERE discord_user_id IS NULL;
+            """
+        )
+
+        # Telegram backfill
+        await conn.execute(
+            """
+            UPDATE users
+               SET telegram_user_id = (
+                     SELECT ui.platform_user_id
+                       FROM user_identities ui
+                      WHERE ui.user_id = users.id
+                        AND ui.platform = 'telegram'
+                      LIMIT 1
+                   )
+             WHERE telegram_user_id IS NULL;
+            """
+        )
+
+        # Display name backfill (prefer discord if present)
+        await conn.execute(
+            """
+            UPDATE users
+               SET display_name = (
+                     SELECT ui.display_name
+                       FROM user_identities ui
+                      WHERE ui.user_id = users.id
+                        AND ui.platform IN ('discord', 'telegram')
+                        AND ui.display_name IS NOT NULL
+                      ORDER BY CASE ui.platform WHEN 'discord' THEN 0 ELSE 1 END
+                      LIMIT 1
+                   )
+             WHERE display_name IS NULL;
+            """
+        )
+
+    # Indexes (not UNIQUE to avoid failing if duplicates exist)
+    try:
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_discord_user_id ON users(discord_user_id);")
+    except Exception:
+        pass
+    try:
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_telegram_user_id ON users(telegram_user_id);")
+    except Exception:
+        pass
+
+MIGRATIONS = [
     (1, _migration_v1),
     (2, _migration_v2),
     (3, _migration_v3),
     (4, _migration_v4),
+    (5, _migration_v5),
 ]
 
 
