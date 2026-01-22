@@ -1,7 +1,13 @@
 services:
   - type: worker
     name: cafe-arcade-bot
-    runtime: python
-    pythonVersion: 3.11.9
+    env: python
+    plan: starter
     buildCommand: pip install -r requirements.txt
     startCommand: python app.py
+    runtime: python
+    pythonVersion: 3.11.9
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
