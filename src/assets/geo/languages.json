@@ -1,0 +1,182 @@
+[
+  { "prompt": "Hello", "answer": "english", "aliases": ["eng", "united states", "usa", "america", "united kingdom", "uk", "england", "canada", "australia", "new zealand", "ireland"] },
+  { "prompt": "How are you?", "answer": "english", "aliases": ["united states", "uk", "canada", "australia"] },
+
+  { "prompt": "Bonjour", "answer": "french", "aliases": ["francais", "français", "france", "belgium", "switzerland", "canada", "quebec", "luxembourg"] },
+  { "prompt": "Merci", "answer": "french", "aliases": ["france", "belgium", "switzerland", "canada"] },
+
+  { "prompt": "Hola", "answer": "spanish", "aliases": ["espanol", "español", "castellano", "spain", "mexico", "argentina", "colombia", "peru", "chile", "venezuela"] },
+  { "prompt": "Gracias", "answer": "spanish", "aliases": ["spain", "mexico", "argentina", "colombia"] },
+
+  { "prompt": "Hallo", "answer": "german", "aliases": ["deutsch", "germany", "austria", "switzerland", "liechtenstein"] },
+  { "prompt": "Danke", "answer": "german", "aliases": ["germany", "austria", "switzerland"] },
+
+  { "prompt": "Ciao", "answer": "italian", "aliases": ["italiano", "italy", "san marino", "switzerland"] },
+  { "prompt": "Grazie", "answer": "italian", "aliases": ["italy", "san marino"] },
+
+  { "prompt": "Olá", "answer": "portuguese", "aliases": ["portugues", "português", "portugal", "brazil", "angola", "mozambique", "cape verde"] },
+  { "prompt": "Obrigado", "answer": "portuguese", "aliases": ["portugal", "brazil"] },
+
+  { "prompt": "Привет", "answer": "russian", "aliases": ["russkiy", "russia", "belarus", "kazakhstan", "kyrgyzstan"] },
+  { "prompt": "Спасибо", "answer": "russian", "aliases": ["russia", "belarus", "kazakhstan"] },
+
+  { "prompt": "Привіт", "answer": "ukrainian", "aliases": ["ukrainska", "ukraine"] },
+  { "prompt": "Дякую", "answer": "ukrainian", "aliases": ["ukraine"] },
+
+  { "prompt": "Здравей", "answer": "bulgarian", "aliases": ["bulgarski", "bulgaria"] },
+  { "prompt": "Благодаря", "answer": "bulgarian", "aliases": ["bulgaria"] },
+
+  { "prompt": "Cześć", "answer": "polish", "aliases": ["polski", "poland"] },
+  { "prompt": "Dziękuję", "answer": "polish", "aliases": ["poland"] },
+
+  { "prompt": "Ahoj", "answer": "czech", "aliases": ["cestina", "čeština", "czech republic", "czechia"] },
+  { "prompt": "Děkuji", "answer": "czech", "aliases": ["czechia", "czech republic"] },
+
+  { "prompt": "Ahoj", "answer": "slovak", "aliases": ["slovencina", "slovenčina", "slovakia"] },
+  { "prompt": "Ďakujem", "answer": "slovak", "aliases": ["slovakia"] },
+
+  { "prompt": "Bună", "answer": "romanian", "aliases": ["română", "romana", "romania", "moldova"] },
+  { "prompt": "Mulțumesc", "answer": "romanian", "aliases": ["romania", "moldova"] },
+
+  { "prompt": "Szia", "answer": "hungarian", "aliases": ["magyar", "hungary"] },
+  { "prompt": "Köszönöm", "answer": "hungarian", "aliases": ["hungary"] },
+
+  { "prompt": "Γεια σου", "answer": "greek", "aliases": ["ellinika", "elliniká", "greece", "cyprus"] },
+  { "prompt": "Ευχαριστώ", "answer": "greek", "aliases": ["greece", "cyprus"] },
+
+  { "prompt": "Merhaba", "answer": "turkish", "aliases": ["turkce", "türkçe", "turkey", "cyprus"] },
+  { "prompt": "Teşekkürler", "answer": "turkish", "aliases": ["turkey"] },
+
+  { "prompt": "Hallo", "answer": "dutch", "aliases": ["nederlands", "netherlands", "belgium"] },
+  { "prompt": "Dank je", "answer": "dutch", "aliases": ["netherlands", "belgium"] },
+
+  { "prompt": "Hej", "answer": "swedish", "aliases": ["svenska", "sweden"] },
+  { "prompt": "Tack", "answer": "swedish", "aliases": ["sweden"] },
+
+  { "prompt": "Hei", "answer": "norwegian", "aliases": ["norsk", "norway"] },
+  { "prompt": "Takk", "answer": "norwegian", "aliases": ["norway"] },
+
+  { "prompt": "Hej", "answer": "danish", "aliases": ["dansk", "denmark"] },
+  { "prompt": "Tak", "answer": "danish", "aliases": ["denmark"] },
+
+  { "prompt": "Hei", "answer": "finnish", "aliases": ["suomi", "finland"] },
+  { "prompt": "Kiitos", "answer": "finnish", "aliases": ["finland"] },
+
+  { "prompt": "Halló", "answer": "icelandic", "aliases": ["islenska", "íslenska", "iceland"] },
+  { "prompt": "Takk", "answer": "icelandic", "aliases": ["iceland"] },
+
+  { "prompt": "Dia dhuit", "answer": "irish", "aliases": ["gaeilge", "ireland"] },
+  { "prompt": "Go raibh maith agat", "answer": "irish", "aliases": ["ireland"] },
+
+  { "prompt": "Shwmae", "answer": "welsh", "aliases": ["cymraeg", "wales", "uk", "united kingdom"] },
+  { "prompt": "Diolch", "answer": "welsh", "aliases": ["wales"] },
+
+  { "prompt": "Olá", "answer": "galician", "aliases": ["galego", "spain", "galicia"] },
+  { "prompt": "Grazas", "answer": "galician", "aliases": ["galicia", "spain"] },
+
+  { "prompt": "Olá", "answer": "catalan", "aliases": ["catala", "català", "spain", "andorra"] },
+  { "prompt": "Gràcies", "answer": "catalan", "aliases": ["catalonia", "andorra", "spain"] },
+
+  { "prompt": "سلام", "answer": "arabic", "aliases": ["alarabiya", "arab", "saudi arabia", "egypt", "morocco", "algeria", "iraq", "jordan", "uae", "qatar"] },
+  { "prompt": "شكرا", "answer": "arabic", "aliases": ["saudi arabia", "egypt", "morocco"] },
+
+  { "prompt": "שלום", "answer": "hebrew", "aliases": ["ivrit", "israel"] },
+  { "prompt": "תודה", "answer": "hebrew", "aliases": ["israel"] },
+
+  { "prompt": "سلام", "answer": "persian", "aliases": ["farsi", "iran", "afghanistan", "tajikistan"] },
+  { "prompt": "متشکرم", "answer": "persian", "aliases": ["farsi", "iran"] },
+
+  { "prompt": "سلام", "answer": "pashto", "aliases": ["afghanistan", "pakistan"] },
+  { "prompt": "مننه", "answer": "pashto", "aliases": ["afghanistan", "pakistan"] },
+
+  { "prompt": "नमस्ते", "answer": "hindi", "aliases": ["hindustani", "india"] },
+  { "prompt": "धन्यवाद", "answer": "hindi", "aliases": ["india"] },
+
+  { "prompt": "হ্যালো", "answer": "bengali", "aliases": ["bangla", "bangladesh", "india"] },
+  { "prompt": "ধন্যবাদ", "answer": "bengali", "aliases": ["bangladesh", "west bengal", "india"] },
+
+  { "prompt": "ਸਤ ਸ੍ਰੀ ਅਕਾਲ", "answer": "punjabi", "aliases": ["panjabi", "india", "pakistan"] },
+  { "prompt": "ਧੰਨਵਾਦ", "answer": "punjabi", "aliases": ["india", "pakistan"] },
+
+  { "prompt": "வணக்கம்", "answer": "tamil", "aliases": ["india", "sri lanka", "singapore", "malaysia"] },
+  { "prompt": "நன்றி", "answer": "tamil", "aliases": ["tamil nadu", "sri lanka"] },
+
+  { "prompt": "నమస్కారం", "answer": "telugu", "aliases": ["india"] },
+  { "prompt": "ధన్యవాదాలు", "answer": "telugu", "aliases": ["andhra pradesh", "telangana", "india"] },
+
+  { "prompt": "ನಮಸ್ಕಾರ", "answer": "kannada", "aliases": ["india"] },
+  { "prompt": "ಧನ್ಯವಾದಗಳು", "answer": "kannada", "aliases": ["karnataka", "india"] },
+
+  { "prompt": "ഹലോ", "answer": "malayalam", "aliases": ["india"] },
+  { "prompt": "നന്ദി", "answer": "malayalam", "aliases": ["kerala", "india"] },
+
+  { "prompt": "สวัสดี", "answer": "thai", "aliases": ["thailand"] },
+  { "prompt": "ขอบคุณ", "answer": "thai", "aliases": ["thailand"] },
+
+  { "prompt": "Xin chào", "answer": "vietnamese", "aliases": ["vietnam", "tieng viet", "tiếng việt"] },
+  { "prompt": "Cảm ơn", "answer": "vietnamese", "aliases": ["vietnam"] },
+
+  { "prompt": "Kumusta", "answer": "tagalog", "aliases": ["filipino", "philippines"] },
+  { "prompt": "Salamat", "answer": "tagalog", "aliases": ["philippines"] },
+
+  { "prompt": "Halo", "answer": "indonesian", "aliases": ["bahasa indonesia", "indonesia"] },
+  { "prompt": "Terima kasih", "answer": "indonesian", "aliases": ["indonesia"] },
+
+  { "prompt": "Apa khabar", "answer": "malay", "aliases": ["bahasa melayu", "malaysia", "brunei", "singapore"] },
+  { "prompt": "Terima kasih", "answer": "malay", "aliases": ["malaysia", "brunei"] },
+
+  { "prompt": "你好嗎", "answer": "cantonese", "aliases": ["hong kong", "macau", "guangdong", "yue"] },
+  { "prompt": "多謝", "answer": "cantonese", "aliases": ["hong kong", "macau"] },
+
+  { "prompt": "안녕하세요", "answer": "korean", "aliases": ["hangul", "korea", "south korea", "republic of korea"] },
+  { "prompt": "감사합니다", "answer": "korean", "aliases": ["south korea"] },
+
+  { "prompt": "こんにちは", "answer": "japanese", "aliases": ["nihongo", "japan"] },
+  { "prompt": "ありがとう", "answer": "japanese", "aliases": ["japan"] },
+
+  { "prompt": "你好", "answer": "mandarin", "aliases": ["chinese", "putonghua", "zhongwen", "china", "taiwan", "singapore"] },
+  { "prompt": "谢谢", "answer": "mandarin", "aliases": ["china", "taiwan"] },
+
+  { "prompt": "Habari", "answer": "swahili", "aliases": ["kiswahili", "kenya", "tanzania", "uganda"] },
+  { "prompt": "Asante", "answer": "swahili", "aliases": ["kenya", "tanzania"] },
+
+  { "prompt": "Sawubona", "answer": "zulu", "aliases": ["south africa", "eswatini", "swaziland"] },
+  { "prompt": "Ngiyabonga", "answer": "zulu", "aliases": ["south africa"] },
+
+  { "prompt": "Jambo", "answer": "amharic", "aliases": ["ethiopia"] },
+  { "prompt": "አመሰግናለሁ", "answer": "amharic", "aliases": ["ethiopia"] },
+
+  { "prompt": "سلام علیکم", "answer": "urdu", "aliases": ["pakistan", "india"] },
+  { "prompt": "شکریہ", "answer": "urdu", "aliases": ["pakistan"] },
+
+  { "prompt": "ہیلو", "answer": "punjabi", "aliases": ["india", "pakistan", "panjabi"] },
+
+  { "prompt": "Sveiki", "answer": "latvian", "aliases": ["latvia"] },
+  { "prompt": "Paldies", "answer": "latvian", "aliases": ["latvia"] },
+
+  { "prompt": "Labas", "answer": "lithuanian", "aliases": ["lietuviu", "lietuvių", "lithuania"] },
+  { "prompt": "Ačiū", "answer": "lithuanian", "aliases": ["lithuania"] },
+
+  { "prompt": "Tere", "answer": "estonian", "aliases": ["eesti", "estonia"] },
+  { "prompt": "Aitäh", "answer": "estonian", "aliases": ["estonia"] },
+
+  { "prompt": "Zdravo", "answer": "serbian", "aliases": ["srpski", "serbia", "bosnia", "montenegro"] },
+  { "prompt": "Hvala", "answer": "serbian", "aliases": ["serbia", "bosnia", "montenegro"] },
+
+  { "prompt": "Bok", "answer": "croatian", "aliases": ["hrvatski", "croatia"] },
+  { "prompt": "Hvala", "answer": "croatian", "aliases": ["croatia"] },
+
+  { "prompt": "Živjo", "answer": "slovenian", "aliases": ["slovenscina", "slovenščina", "slovenia"] },
+  { "prompt": "Hvala", "answer": "slovenian", "aliases": ["slovenia"] },
+
+  { "prompt": "Shalom", "answer": "yiddish", "aliases": ["yidish", "ashkenazi"] },
+
+  { "prompt": "Sannu", "answer": "hausa", "aliases": ["nigeria", "niger"] },
+  { "prompt": "Na gode", "answer": "hausa", "aliases": ["nigeria", "niger"] },
+
+  { "prompt": "Ẹ n lẹ", "answer": "yoruba", "aliases": ["nigeria", "benin", "togo"] },
+  { "prompt": "Ẹ ṣé", "answer": "yoruba", "aliases": ["nigeria"] },
+
+  { "prompt": "Bawo", "answer": "igbo", "aliases": ["nigeria"] },
+  { "prompt": "Daalụ", "answer": "igbo", "aliases": ["nigeria"] }
+]

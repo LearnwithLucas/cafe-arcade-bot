@@ -1,0 +1,17 @@
+# secrets
+.env
+.env.*
+
+!.env.example
+
+# python venvs
+.venv/
+venv/
+
+# sqlite/db
+data/
+*.sqlite
+*.db
+
+# pycharm
+.idea/
