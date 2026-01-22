@@ -13,5 +13,9 @@ data/
 *.sqlite
 *.db
 
+# python cache
+__pycache__/
+*.pyc
+
 # pycharm
 .idea/
