@@ -46,17 +46,32 @@ class ShopItems:
     """
     Default item catalog (seed data).
 
+    Item price guide:
+      1–3 beans   — daily treats (cookie, tea, coffee)
+      4–8 beans   — small rewards (snack, juice, phrasebook)
+      10–15 beans — useful tools (dictionary, flashcards)
+      20 beans    — prestige badge
+
     You can add/rebalance items here; then, on startup, seed these into the DB table
     `shop_items` via ShopRepository.upsert_item(...).
-
-    After that, your shop UI/logic should read from the DB (recommended).
     """
+
+    # ---- Food & Drinks ----
+
+    COOKIE = ShopItem(
+        key="cookie",
+        name="🍪 Cookie",
+        description="A tasty cookie. Good vibes only.",
+        cost_beans=2,
+        max_stack=50,
+        max_uses_per_day=5,
+    )
 
     COFFEE = ShopItem(
         key="coffee",
         name="☕ Coffee",
         description="A warm coffee. Productivity +100% (emotionally).",
-        cost_beans=250,       # 2.5x cookie price
+        cost_beans=3,
         max_stack=25,
         max_uses_per_day=3,
     )
@@ -65,26 +80,79 @@ class ShopItems:
         key="tea",
         name="🍵 Tea",
         description="A calm cup of tea. Inner peace +1.",
-        cost_beans=250,       # 2.5x cookie price
+        cost_beans=3,
         max_stack=25,
         max_uses_per_day=3,
     )
 
-    COOKIE = ShopItem(
-        key="cookie",
-        name="🍪 Cookie",
-        description="A tasty cookie. Good vibes only.",
-        cost_beans=100,       # base price
-        max_stack=50,
-        max_uses_per_day=5,
+    STROOPWAFEL = ShopItem(
+        key="stroopwafel",
+        name="🧇 Stroopwafel",
+        description="A Dutch classic. Place it on your coffee and wait. Patience is a language skill.",
+        cost_beans=4,
+        max_stack=25,
+        max_uses_per_day=3,
+    )
+
+    JUICE = ShopItem(
+        key="juice",
+        name="🧃 Juice Box",
+        description="A little juice box. Small but mighty.",
+        cost_beans=5,
+        max_stack=20,
+        max_uses_per_day=2,
+    )
+
+    # ---- Language Learning ----
+
+    PHRASEBOOK = ShopItem(
+        key="phrasebook",
+        name="📖 Phrasebook",
+        description="A pocket phrasebook. Fits in your back pocket, weighs nothing, impresses everyone.",
+        cost_beans=6,
+        max_stack=10,
+        max_uses_per_day=2,
+    )
+
+    FLASHCARDS = ShopItem(
+        key="flashcards",
+        name="🗂️ Flashcards",
+        description="A fresh deck of flashcards. The old ones are full of doodles anyway.",
+        cost_beans=10,
+        max_stack=10,
+        max_uses_per_day=1,
+    )
+
+    DICTIONARY = ShopItem(
+        key="dictionary",
+        name="📚 Dictionary",
+        description="A proper dictionary. Heavy enough to press flowers, useful enough to actually open.",
+        cost_beans=15,
+        max_stack=5,
+        max_uses_per_day=1,
+    )
+
+    FLUENCY_BADGE = ShopItem(
+        key="fluency_badge",
+        name="🏅 Fluency Badge",
+        description="A badge that says you showed up and kept going. Wear it with pride.",
+        cost_beans=20,
+        max_stack=1,
+        max_uses_per_day=1,
     )
 
     @classmethod
     def all(cls) -> Dict[str, ShopItem]:
         return {
+            cls.COOKIE.key: cls.COOKIE,
             cls.COFFEE.key: cls.COFFEE,
             cls.TEA.key: cls.TEA,
-            cls.COOKIE.key: cls.COOKIE,
+            cls.STROOPWAFEL.key: cls.STROOPWAFEL,
+            cls.JUICE.key: cls.JUICE,
+            cls.PHRASEBOOK.key: cls.PHRASEBOOK,
+            cls.FLASHCARDS.key: cls.FLASHCARDS,
+            cls.DICTIONARY.key: cls.DICTIONARY,
+            cls.FLUENCY_BADGE.key: cls.FLUENCY_BADGE,
         }
 
     @classmethod
