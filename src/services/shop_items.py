@@ -12,7 +12,7 @@ class ShopItem:
     IMPORTANT:
       - These are the *default seeds* for the DB catalog (shop_items table).
       - Your live shop should read the catalog from SQLite (so you can rebalance later
-        without redeploying), but we keep these defaults so a fresh DB “just works”.
+        without redeploying), but we keep these defaults so a fresh DB "just works".
     """
 
     key: str
@@ -56,7 +56,7 @@ class ShopItems:
         key="coffee",
         name="☕ Coffee",
         description="A warm coffee. Productivity +100% (emotionally).",
-        cost_beans=25,
+        cost_beans=250,       # 2.5x cookie price
         max_stack=25,
         max_uses_per_day=3,
     )
@@ -65,7 +65,7 @@ class ShopItems:
         key="tea",
         name="🍵 Tea",
         description="A calm cup of tea. Inner peace +1.",
-        cost_beans=25,
+        cost_beans=250,       # 2.5x cookie price
         max_stack=25,
         max_uses_per_day=3,
     )
@@ -74,7 +74,7 @@ class ShopItems:
         key="cookie",
         name="🍪 Cookie",
         description="A tasty cookie. Good vibes only.",
-        cost_beans=10,
+        cost_beans=100,       # base price
         max_stack=50,
         max_uses_per_day=5,
     )

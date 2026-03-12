@@ -13,6 +13,8 @@ from src.platforms.discord.inventory_commands import InventoryCommands
 from src.platforms.discord.shop_commands import ShopCommands
 from src.services.cooldowns import Cooldowns
 from src.services.rewards_service import RewardKey, RewardsService
+from src.platforms.discord.admin_commands import AdminCommands
+
 
 logger = logging.getLogger(__name__)
 
@@ -459,6 +461,9 @@ async def setup(bot: discord.Client) -> None:
             bot.tree.add_command(GeoGuessrCommands(flags_game=geo_flags, language_game=geo_language))
         else:
             logger.warning("geo_flags or geo_language not found; /geoguessr commands not registered")
+
+    if "admin" not in existing:
+        bot.tree.add_command(AdminCommands(services=services))
 
     logger.info(
         "Discord commands registered: %s",
