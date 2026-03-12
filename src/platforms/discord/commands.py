@@ -20,10 +20,9 @@ logger = logging.getLogger(__name__)
 # =====================
 # CHANNEL IDS (DISCORD)
 # =====================
-BEAN_COUNTER_CHANNEL_ID = 1454125725467541628  # 🧮┃bean-counter  (daily/work)
-BEAN_HELP_CHANNEL_ID = 1454125616558506158  # ❓┃bean-help     (info)
-BEAN_SHOP_CHANNEL_ID = 1454125852827582520  # 🛍️┃bean-shop     (shop)
-
+BEAN_COUNTER_CHANNEL_ID = 1481764812248842280  # 🧮 bean-counter
+BEAN_HELP_CHANNEL_ID = 1481764898496053480      # ❓ bean-help
+BEAN_SHOP_CHANNEL_ID = 1481764947787780298      # 🛍️ bean-shop
 
 def _has_service(services: dict[str, Any], key: str) -> bool:
     return services.get(key) is not None

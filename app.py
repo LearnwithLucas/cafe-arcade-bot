@@ -45,19 +45,17 @@ from src.platforms.discord.bot import build_discord_bot
 
 
 # ---- Channel IDs (Discord) ----
-WORD_CHAIN_CHANNEL_ID = 1458083222650097705
-WORDLE_CHANNEL_ID = 1458083142211731547        # 🔤┃wordle
-UNSCRAMBLE_CHANNEL_ID = 1458083175375831172    # 🔤┃unscramble
-LEADERBOARD_CHANNEL_ID = 1458088882749968535
+WORD_CHAIN_CHANNEL_ID = 1481745881123520573     # CHANGE THIS — word-chain channel
+WORDLE_CHANNEL_ID = 1481745735652474920         # CHANGE THIS — wordle channel
+UNSCRAMBLE_CHANNEL_ID = 1481745817021845607     # CHANGE THIS — unscramble channel
+LEADERBOARD_CHANNEL_ID = 1481746468737126564    # CHANGE THIS — progress channel
 
 # Geo-learning channel (set to your real geo-learning channel id)
-# Use 0 to disable geo-learning registration.
-GEO_LEARNING_CHANNEL_ID = 0  # e.g. 123456789012345678
+GEO_LEARNING_CHANNEL_ID = 0  # leave as 0 for now — you don't have this channel yet
 
 # GeoGuessr arcade channels (Flags / Language)
-# Use 0 to disable registration until you set real IDs.
-GEO_FLAGS_CHANNEL_ID = 1463481092966453343
-GEO_LANGUAGE_CHANNEL_ID = 1463481137333796948
+GEO_FLAGS_CHANNEL_ID = 1481763185668395263      # CHANGE THIS — geo-flags channel
+GEO_LANGUAGE_CHANNEL_ID = 1481763326164865087   # CHANGE THIS — geo-language channel
 
 # ---- Assets ----
 WORDS_TXT_PATH = Path("src/assets/words_en.txt")
