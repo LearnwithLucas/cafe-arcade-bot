@@ -319,6 +319,10 @@ async def main() -> None:
         "shop": shop_service,
         # Dutch shop
         "dutch_shop": dutch_shop_service,
+        # Dutch games
+        "wordle_nl": wordle_nl,
+        "unscramble_nl": unscramble_nl,
+        "word_chain_nl": word_chain_nl,
         # geo
         "geo_learning_bank": geo_learning_bank,
         "geo_learning": geo_learning,
