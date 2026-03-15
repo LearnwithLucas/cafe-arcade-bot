@@ -14,12 +14,10 @@ from src.db.repo.economy_repo import EconomyRepository
 from src.db.repo.leaderboard_repo import LeaderboardRepository
 from src.db.repo.leaderboard_posts_repo import LeaderboardPostsRepository
 from src.db.repo.games_repo import GamesRepository
-
-# --- Shop ---
 from src.db.repo.shop_repo import ShopRepository
-from src.services.shop_service import ShopService
-from src.services.shop_items import ShopItems
 
+from src.services.shop_service import ShopService
+from src.services.shop_items import ShopItems, DutchShopItems
 from src.services.cooldowns import Cooldowns
 from src.services.economy_service import EconomyService
 from src.services.game_registry import GameRegistry
@@ -32,11 +30,9 @@ from src.games.english.word_chain import WordChainGame
 from src.games.english.wordle import WordleGame
 from src.games.english.unscramble import UnscrambleGame
 
-# --- GeoGuessr Learning (Flags & Scripts) ---
 from src.services.geo_learning_bank import GeoLearningBank
 from src.games.geoguessr.learning import GeoLearningGame
 
-# --- GeoGuessr Arcade Games (Flags & Language) ---
 from src.services.geo_quiz_bank import GeoQuizBank
 from src.games.geoguessr.flags_game import GeoFlagsGame
 from src.games.geoguessr.language_game import GeoLanguageGame
@@ -49,11 +45,7 @@ WORD_CHAIN_CHANNEL_ID = 1481745881123520573
 WORDLE_CHANNEL_ID = 1481745735652474920
 UNSCRAMBLE_CHANNEL_ID = 1481745817021845607
 LEADERBOARD_CHANNEL_ID = 1481746468737126564
-
-# Geo-learning channel (not yet active)
 GEO_LEARNING_CHANNEL_ID = 0
-
-# GeoGuessr arcade channels
 GEO_FLAGS_CHANNEL_ID = 1481763185668395263
 GEO_LANGUAGE_CHANNEL_ID = 1481763326164865087
 
@@ -70,7 +62,7 @@ async def main() -> None:
     await db.connect()
     await run_migrations(db)
 
-    # --- Load word list once ---
+    # --- Load word list ---
     wordlist = WordList.load_from_txt(WORDS_TXT_PATH)
 
     # --- Repositories ---
@@ -79,16 +71,10 @@ async def main() -> None:
     leaderboard_repo = LeaderboardRepository(db)
     leaderboard_posts_repo = LeaderboardPostsRepository(db)
     games_repo = GamesRepository(db)
-
-    # --- Shop repo ---
     shop_repo = ShopRepository(db)
 
     # --- English leaderboard publisher ---
-    english_game_keys = [
-        "word_chain",
-        "wordle",
-        "unscramble",
-    ]
+    english_game_keys = ["word_chain", "wordle", "unscramble"]
 
     leaderboard_publisher = LeaderboardPublisher(
         config=LeaderboardConfig(
@@ -133,16 +119,37 @@ async def main() -> None:
 
     cooldowns = Cooldowns()
 
-    # --- Shop service ---
+    # --- English shop service ---
     shop_service = ShopService(
         users_repo=users_repo,
         economy=economy_service,
         shop_repo=shop_repo,
     )
 
-    # --- Seed shop catalog (idempotent, DB-backed; safe on Render restarts) ---
+    # --- Dutch shop service (separate ShopService instance, same repo) ---
+    dutch_shop_service = ShopService(
+        users_repo=users_repo,
+        economy=economy_service,
+        shop_repo=shop_repo,
+    )
+
+    # --- Seed English shop catalog ---
     try:
         for it in ShopItems.all().values():
+            await shop_repo.upsert_item(
+                item_key=it.key,
+                name=it.name,
+                description=it.description,
+                price=int(it.cost_beans),
+                max_use_per_day=int(it.max_uses_per_day),
+                max_inventory=int(it.max_stack),
+            )
+    except Exception:
+        pass
+
+    # --- Seed Dutch shop catalog ---
+    try:
+        for it in DutchShopItems.all().values():
             await shop_repo.upsert_item(
                 item_key=it.key,
                 name=it.name,
@@ -195,7 +202,7 @@ async def main() -> None:
     )
     game_registry.register(unscramble)
 
-    # --- Games: Geo Learning (Flags & Scripts) ---
+    # --- Games: Geo Learning ---
     geo_learning_bank = GeoLearningBank()
     geo_learning = None
     if int(GEO_LEARNING_CHANNEL_ID) > 0:
@@ -205,7 +212,7 @@ async def main() -> None:
         )
         game_registry.register(geo_learning)
 
-    # --- GeoGuessr arcade: shared dataset bank ---
+    # --- GeoGuessr arcade ---
     geo_quiz_bank = GeoQuizBank.load_from_assets()
 
     geo_flags = None
@@ -254,13 +261,14 @@ async def main() -> None:
         "word_chain": word_chain,
         "wordle": wordle,
         "unscramble": unscramble,
-        # shop
+        # English shop
         "shop_repo": shop_repo,
         "shop": shop_service,
-        # geo learning
+        # Dutch shop
+        "dutch_shop": dutch_shop_service,
+        # geo
         "geo_learning_bank": geo_learning_bank,
         "geo_learning": geo_learning,
-        # geo arcade
         "geo_quiz_bank": geo_quiz_bank,
         "geo_flags": geo_flags,
         "geo_language": geo_language,

@@ -6,29 +6,13 @@ from typing import Dict, Iterable, List
 
 @dataclass(frozen=True)
 class ShopItem:
-    """
-    Canonical in-code defaults for shop items.
-
-    IMPORTANT:
-      - These are the *default seeds* for the DB catalog (shop_items table).
-      - Your live shop should read the catalog from SQLite (so you can rebalance later
-        without redeploying), but we keep these defaults so a fresh DB "just works".
-    """
-
     key: str
     name: str
     description: str
-
-    # Price in beans
     cost_beans: int
-
-    # Inventory cap (max quantity user can hold)
     max_stack: int
-
-    # Daily usage limit (max uses per UTC day)
     max_uses_per_day: int
 
-    # ---- Compatibility aliases (DB naming) ----
     @property
     def price(self) -> int:
         return int(self.cost_beans)
@@ -44,19 +28,8 @@ class ShopItem:
 
 class ShopItems:
     """
-    Default item catalog (seed data).
-
-    Item price guide:
-      1–3 beans   — daily treats (cookie, tea, coffee)
-      4–8 beans   — small rewards (snack, juice, phrasebook)
-      10–15 beans — useful tools (dictionary, flashcards)
-      20 beans    — prestige badge
-
-    You can add/rebalance items here; then, on startup, seed these into the DB table
-    `shop_items` via ShopRepository.upsert_item(...).
+    English shop catalog (seed data for English server).
     """
-
-    # ---- Food & Drinks ----
 
     COOKIE = ShopItem(
         key="cookie",
@@ -102,8 +75,6 @@ class ShopItems:
         max_stack=20,
         max_uses_per_day=2,
     )
-
-    # ---- Language Learning ----
 
     PHRASEBOOK = ShopItem(
         key="phrasebook",
@@ -169,14 +140,138 @@ class ShopItems:
 
     @classmethod
     async def seed_defaults(cls, *, shop_repo) -> None:
-        """
-        Seed default items into the DB catalog.
+        for item in cls.list():
+            await shop_repo.upsert_item(
+                item_key=item.key,
+                name=item.name,
+                description=item.description,
+                price=int(item.cost_beans),
+                max_use_per_day=int(item.max_uses_per_day),
+                max_inventory=int(item.max_stack),
+            )
 
-        Expects shop_repo to implement:
-          upsert_item(item_key, name, description, price, max_use_per_day, max_inventory)
 
-        Safe to call on every startup.
-        """
+class DutchShopItems:
+    """
+    Dutch shop catalog (seed data for Dutch server).
+    Keys are prefixed with nl_ to avoid collisions with English items in the DB.
+    """
+
+    STROOPWAFEL = ShopItem(
+        key="nl_stroopwafel",
+        name="🧇 Stroopwafel",
+        description="Een echte Nederlandse klassieker. Leg hem op je koffie en wacht geduldig. Geduld is ook een taalvaardigheid.",
+        cost_beans=3,
+        max_stack=30,
+        max_uses_per_day=3,
+    )
+
+    HAGELSLAG = ShopItem(
+        key="nl_hagelslag",
+        name="🍫 Hagelslag",
+        description="Chocoladehagelslag op wit brood. Nederlanders eten dit echt als lunch. Welkom in Nederland.",
+        cost_beans=3,
+        max_stack=30,
+        max_uses_per_day=3,
+    )
+
+    DROP = ShopItem(
+        key="nl_drop",
+        name="🖤 Dropje",
+        description="Zoet, zout of dubbelzout — drop is niet voor iedereen. Maar als je het lekker vindt, ben je écht ingeburgerd.",
+        cost_beans=4,
+        max_stack=25,
+        max_uses_per_day=3,
+    )
+
+    KOFFIE = ShopItem(
+        key="nl_koffie",
+        name="☕ Koffie",
+        description="Een bakje troost. Sterk, zwart, en geserveerd met een koekje dat je eigenlijk niet mag eten.",
+        cost_beans=3,
+        max_stack=25,
+        max_uses_per_day=3,
+    )
+
+    BESCHUIT = ShopItem(
+        key="nl_beschuit",
+        name="🥐 Beschuit met muisjes",
+        description="Roze of blauw — traditioneel voor een geboorte. Maar jij verdient hem gewoon omdat je Nederlands oefent.",
+        cost_beans=5,
+        max_stack=20,
+        max_uses_per_day=2,
+    )
+
+    KAASJE = ShopItem(
+        key="nl_kaasje",
+        name="🧀 Kaasje",
+        description="Een plakje gouda. Nederland exporteert kaas én taal. Jij importeert allebei.",
+        cost_beans=5,
+        max_stack=20,
+        max_uses_per_day=2,
+    )
+
+    WOORDENBOEK = ShopItem(
+        key="nl_woordenboek",
+        name="📚 Woordenboek",
+        description="Een echt Nederlands woordenboek. Dik, zwaar, en vol woorden die je nog niet kent. Dat is het punt.",
+        cost_beans=15,
+        max_stack=5,
+        max_uses_per_day=1,
+    )
+
+    WOORDKAARTJES = ShopItem(
+        key="nl_woordkaartjes",
+        name="🗂️ Woordkaartjes",
+        description="Een stapel woordkaartjes om nieuwe woorden te oefenen. De vorige stapel ligt ergens onder je bureau.",
+        cost_beans=10,
+        max_stack=10,
+        max_uses_per_day=1,
+    )
+
+    SPREEKBADGE = ShopItem(
+        key="nl_spreekbadge",
+        name="🏅 Spreekbadge",
+        description="Een badge voor iedereen die blijft oefenen, ook als het moeilijk is. Draag hem met trots.",
+        cost_beans=20,
+        max_stack=1,
+        max_uses_per_day=1,
+    )
+
+    FIETS = ShopItem(
+        key="nl_fiets",
+        name="🚲 Fiets",
+        description="Niet echt een fiets. Maar symbolisch: je gaat vooruit. Op je eigen tempo, zonder helm.",
+        cost_beans=25,
+        max_stack=1,
+        max_uses_per_day=1,
+    )
+
+    @classmethod
+    def all(cls) -> Dict[str, ShopItem]:
+        return {
+            cls.STROOPWAFEL.key: cls.STROOPWAFEL,
+            cls.HAGELSLAG.key: cls.HAGELSLAG,
+            cls.DROP.key: cls.DROP,
+            cls.KOFFIE.key: cls.KOFFIE,
+            cls.BESCHUIT.key: cls.BESCHUIT,
+            cls.KAASJE.key: cls.KAASJE,
+            cls.WOORDENBOEK.key: cls.WOORDENBOEK,
+            cls.WOORDKAARTJES.key: cls.WOORDKAARTJES,
+            cls.SPREEKBADGE.key: cls.SPREEKBADGE,
+            cls.FIETS.key: cls.FIETS,
+        }
+
+    @classmethod
+    def list(cls) -> List[ShopItem]:
+        return list(cls.all().values())
+
+    @classmethod
+    def get(cls, key: str) -> ShopItem | None:
+        return cls.all().get((key or "").strip().lower())
+
+    @classmethod
+    async def seed_defaults(cls, *, shop_repo) -> None:
         for item in cls.list():
             await shop_repo.upsert_item(
                 item_key=item.key,

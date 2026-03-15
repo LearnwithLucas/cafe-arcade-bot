@@ -94,7 +94,6 @@ async def _migration_v1(conn) -> None:
         """
     )
 
-    # Legacy name kept for backwards compatibility (some older code used this).
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS game_sessions (
@@ -160,9 +159,7 @@ async def _migration_v2(conn) -> None:
 
 async def _migration_v3(conn) -> None:
     """
-    Shop v1:
-      - Persistent inventory per user
-      - Daily use tracking per item (UTC day string)
+    Shop v1.
     """
     await conn.execute(
         """
@@ -194,13 +191,8 @@ async def _migration_v3(conn) -> None:
 
 async def _migration_v4(conn) -> None:
     """
-    Compatibility + Shop catalog (recommended):
-
-    1) Create active_game_sessions table used by GamesRepository (keeps game_sessions as legacy).
-    2) Make game_results compatible with both 'context' and 'context_json' column names.
-    3) Add shop_items catalog so shop can be server-configured without code changes.
+    Compatibility + Shop catalog.
     """
-    # --- Active sessions table (used by current code) ---
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS active_game_sessions (
@@ -218,7 +210,6 @@ async def _migration_v4(conn) -> None:
         """
     )
 
-    # Optional: speed up active session lookups
     try:
         await conn.execute(
             """
@@ -229,17 +220,12 @@ async def _migration_v4(conn) -> None:
     except Exception:
         pass
 
-    # --- game_results column compatibility ---
     if await _table_exists(conn, "game_results"):
-        # Newer code may insert into "context" (GamesRepository uses context)
         if not await _column_exists(conn, "game_results", "context"):
             await conn.execute("ALTER TABLE game_results ADD COLUMN context TEXT;")
-
-        # Older/other code may still use context_json
         if not await _column_exists(conn, "game_results", "context_json"):
             await conn.execute("ALTER TABLE game_results ADD COLUMN context_json TEXT;")
 
-    # --- Shop catalog (3 items live here, plus future items) ---
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS shop_items (
@@ -255,7 +241,6 @@ async def _migration_v4(conn) -> None:
         """
     )
 
-    # Optional indexes for speed
     try:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_shop_inventory_user ON shop_inventory(user_id);")
     except Exception:
@@ -268,20 +253,11 @@ async def _migration_v4(conn) -> None:
 
 async def _migration_v5(conn) -> None:
     """
-    Users table compatibility:
-
-    Current code expects users to have:
-      - discord_user_id
-      - telegram_user_id
-      - display_name
-
-    Older DBs only stored platform ids in user_identities.
-    This migration adds missing columns + backfills best-effort.
+    Users table compatibility.
     """
     if not await _table_exists(conn, "users"):
         return
 
-    # Add missing columns (TEXT to match current repo code using str(...))
     if not await _column_exists(conn, "users", "discord_user_id"):
         await conn.execute("ALTER TABLE users ADD COLUMN discord_user_id TEXT;")
 
@@ -291,9 +267,7 @@ async def _migration_v5(conn) -> None:
     if not await _column_exists(conn, "users", "display_name"):
         await conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT;")
 
-    # Backfill from user_identities if it exists
     if await _table_exists(conn, "user_identities"):
-        # Discord backfill
         await conn.execute(
             """
             UPDATE users
@@ -307,8 +281,6 @@ async def _migration_v5(conn) -> None:
              WHERE discord_user_id IS NULL;
             """
         )
-
-        # Telegram backfill
         await conn.execute(
             """
             UPDATE users
@@ -322,8 +294,6 @@ async def _migration_v5(conn) -> None:
              WHERE telegram_user_id IS NULL;
             """
         )
-
-        # Display name backfill (prefer discord if present)
         await conn.execute(
             """
             UPDATE users
@@ -340,7 +310,6 @@ async def _migration_v5(conn) -> None:
             """
         )
 
-    # Indexes (not UNIQUE to avoid failing if duplicates exist)
     try:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_discord_user_id ON users(discord_user_id);")
     except Exception:
@@ -350,12 +319,61 @@ async def _migration_v5(conn) -> None:
     except Exception:
         pass
 
+
+async def _migration_v6(conn) -> None:
+    """
+    Guild-scoped economy.
+
+    Adds guild_id to bean_accounts and bean_transactions so Dutch and English
+    members have separate balances and transaction histories.
+
+    - guild_id TEXT NULL — NULL means English server (legacy rows preserved as-is)
+    - bean_accounts primary key changes from (user_id) to (user_id, guild_id)
+      via a new guild-aware table.
+    - Dutch shop inventory is also scoped by guild.
+    """
+    # --- bean_accounts: add guild_id column ---
+    if await _table_exists(conn, "bean_accounts"):
+        if not await _column_exists(conn, "bean_accounts", "guild_id"):
+            await conn.execute("ALTER TABLE bean_accounts ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'en';")
+
+    # --- bean_transactions: add guild_id column ---
+    if await _table_exists(conn, "bean_transactions"):
+        if not await _column_exists(conn, "bean_transactions", "guild_id"):
+            await conn.execute("ALTER TABLE bean_transactions ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'en';")
+
+    # --- shop_inventory: add guild_id column ---
+    if await _table_exists(conn, "shop_inventory"):
+        if not await _column_exists(conn, "shop_inventory", "guild_id"):
+            await conn.execute("ALTER TABLE shop_inventory ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'en';")
+
+    # --- shop_item_uses: add guild_id column ---
+    if await _table_exists(conn, "shop_item_uses"):
+        if not await _column_exists(conn, "shop_item_uses", "guild_id"):
+            await conn.execute("ALTER TABLE shop_item_uses ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'en';")
+
+    # Indexes for guild-scoped queries
+    try:
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_bean_accounts_guild ON bean_accounts(user_id, guild_id);"
+        )
+    except Exception:
+        pass
+    try:
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_bean_transactions_guild ON bean_transactions(user_id, guild_id);"
+        )
+    except Exception:
+        pass
+
+
 MIGRATIONS = [
     (1, _migration_v1),
     (2, _migration_v2),
     (3, _migration_v3),
     (4, _migration_v4),
     (5, _migration_v5),
+    (6, _migration_v6),
 ]
 
 

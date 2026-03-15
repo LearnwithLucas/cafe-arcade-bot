@@ -4,7 +4,7 @@ import logging
 from typing import Optional
 
 from src.db.repo.users_repo import UsersRepository
-from src.db.repo.economy_repo import EconomyRepository
+from src.db.repo.economy_repo import EconomyRepository, GUILD_EN
 from src.services.leaderboard_publisher import LeaderboardPublisher
 
 logger = logging.getLogger(__name__)
@@ -22,12 +22,18 @@ class EconomyService:
         self._economy_repo = economy_repo
         self._publisher = leaderboard_publisher
 
-    async def get_balance_discord(self, *, user_id: int, display_name: str | None = None) -> int:
+    async def get_balance_discord(
+        self,
+        *,
+        user_id: int,
+        display_name: str | None = None,
+        guild_id: str = GUILD_EN,
+    ) -> int:
         user = await self._users_repo.get_or_create_discord_user(
             discord_user_id=user_id,
             display_name=display_name,
         )
-        return await self._economy_repo.get_balance(user.id)
+        return await self._economy_repo.get_balance(user.id, guild_id=guild_id)
 
     async def award_beans_discord(
         self,
@@ -38,13 +44,18 @@ class EconomyService:
         game_key: str | None = None,
         display_name: str | None = None,
         metadata: str | None = None,
+        guild_id: str = GUILD_EN,
     ) -> int:
         """
-        Adds (or subtracts) beans and returns the new balance.
+        Adds (or subtracts) beans for the given guild and returns the new balance.
         Triggers a debounced leaderboard refresh.
         """
         if amount == 0:
-            return await self.get_balance_discord(user_id=user_id, display_name=display_name)
+            return await self.get_balance_discord(
+                user_id=user_id,
+                display_name=display_name,
+                guild_id=guild_id,
+            )
 
         user = await self._users_repo.get_or_create_discord_user(
             discord_user_id=user_id,
@@ -57,17 +68,18 @@ class EconomyService:
             reason=reason,
             game_key=game_key,
             metadata=metadata,
+            guild_id=guild_id,
         )
 
         logger.info(
-            "Awarded %s beans to user_id=%s (discord=%s) reason=%s",
+            "Awarded %s beans to user_id=%s (discord=%s) guild=%s reason=%s",
             amount,
             user.id,
             user_id,
+            guild_id,
             reason,
         )
 
-        # Debounced auto-refresh of the leaderboard channel
         if self._publisher:
             try:
                 self._publisher.schedule_refresh()

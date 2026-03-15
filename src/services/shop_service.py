@@ -7,6 +7,7 @@ from typing import Any
 
 from src.db.repo.shop_repo import ShopRepository
 from src.db.repo.users_repo import UsersRepository
+from src.db.repo.economy_repo import GUILD_EN
 from src.services.cooldowns import Cooldowns
 from src.services.economy_service import EconomyService
 from src.services.rewards_service import RewardsService
@@ -33,10 +34,7 @@ class ShopService:
       - DB daily-use tracking (shop_item_uses, UTC day)
       - EconomyService for bean transactions
 
-    IMPORTANT:
-      - We keep ShopItems as the in-code "source of truth" for starter items,
-        but we upsert them into shop_items so you can render a proper shop UI.
-      - rewards/cooldowns are accepted for future expansion (discounts, item effects, etc).
+    guild_id scopes the bean balance so Dutch and English economies stay separate.
     """
 
     def __init__(
@@ -51,11 +49,8 @@ class ShopService:
         self._users_repo = users_repo
         self._economy = economy
         self._shop_repo = shop_repo
-
-        # reserved for future effects (not used yet)
         self._rewards = rewards
         self._cooldowns = cooldowns
-
         self._catalog_seeded: bool = False
 
     # -----------------------
@@ -63,16 +58,11 @@ class ShopService:
     # -----------------------
 
     async def _ensure_catalog_seeded(self) -> None:
-        """
-        Upserts your in-code catalog into DB (idempotent).
-        This makes the system Render-safe and restart-safe without relying on memory.
-        """
         if self._catalog_seeded:
             return
 
         items = ShopItems.all()
         for _, item in items.items():
-            # Map ShopItem -> DB catalog fields
             await self._shop_repo.upsert_item(
                 item_key=str(item.key),
                 name=str(item.name),
@@ -85,10 +75,6 @@ class ShopService:
         self._catalog_seeded = True
 
     async def _get_item(self, item_key: str) -> tuple[dict[str, Any] | None, ShopItem | None]:
-        """
-        Returns:
-          (db_item_row_or_none, code_item_or_none)
-        """
         await self._ensure_catalog_seeded()
         db_item = await self._shop_repo.get_item(item_key=str(item_key))
         code_item = ShopItems.get(item_key)
@@ -106,7 +92,6 @@ class ShopService:
             display_name=display_name,
         )
 
-        # Joined view: includes all shop items (even if quantity = 0)
         rows = await self._shop_repo.get_inventory_with_catalog(user_id=user.id)
 
         out: list[dict[str, Any]] = []
@@ -141,12 +126,12 @@ class ShopService:
         display_name: str | None,
         item_key: str,
         quantity: int,
+        guild_id: str = GUILD_EN,
     ) -> ShopResult:
         db_item, code_item = await self._get_item(item_key)
         if not db_item and not code_item:
             return ShopResult(False, f"Unknown item: `{item_key}`")
 
-        # Prefer DB fields; fallback to code fields
         key = str(db_item["item_key"]) if db_item else str(code_item.key)
         name = str(db_item["name"]) if db_item else str(code_item.name)
         price = int(db_item["price"]) if db_item else int(getattr(code_item, "cost_beans", 0))
@@ -169,14 +154,16 @@ class ShopService:
         qty_to_add = min(qty, max_stack - current_qty)
         total_cost = int(price) * int(qty_to_add)
 
+        # Check balance in the correct guild economy
         balance = await self._economy.get_balance_discord(
             user_id=discord_user_id,
             display_name=display_name,
+            guild_id=guild_id,
         )
         if balance < total_cost:
             return ShopResult(False, f"Not enough beans. Cost: **{total_cost}**, you have: **{balance}**.")
 
-        # Charge beans (negative transaction)
+        # Deduct beans from the correct guild economy
         new_balance = await self._economy.award_beans_discord(
             user_id=discord_user_id,
             amount=-int(total_cost),
@@ -184,6 +171,7 @@ class ShopService:
             game_key="shop",
             display_name=display_name,
             metadata=json.dumps({"item": key, "qty": qty_to_add, "cost": total_cost}, ensure_ascii=False),
+            guild_id=guild_id,
         )
 
         new_qty = await self._shop_repo.add_quantity(user_id=user.id, item_key=key, delta=qty_to_add)
@@ -216,7 +204,7 @@ class ShopService:
 
         max_uses_per_day = int(db_item["max_use_per_day"]) if db_item else int(getattr(code_item, "max_uses_per_day", 0))
         if max_uses_per_day <= 0:
-            return ShopResult(False, f"{name} can’t be used yet.")
+            return ShopResult(False, f"{name} can't be used yet.")
 
         qty = max(1, min(25, int(quantity)))
 
@@ -227,7 +215,7 @@ class ShopService:
 
         current_qty = await self._shop_repo.get_quantity(user_id=user.id, item_key=key)
         if current_qty <= 0:
-            return ShopResult(False, f"You don’t have any **{name}**.")
+            return ShopResult(False, f"You don't have any **{name}**.")
 
         qty_to_use = min(qty, current_qty)
 
@@ -235,24 +223,29 @@ class ShopService:
         used_today = await self._shop_repo.get_used_today(user_id=user.id, item_key=key, day_utc=day)
         remaining_today = max(0, int(max_uses_per_day) - int(used_today))
         if remaining_today <= 0:
-            return ShopResult(False, f"You’ve hit today’s limit for {name} (**{max_uses_per_day}/day**).")
+            return ShopResult(False, f"You've hit today's limit for {name} (**{max_uses_per_day}/day**).")
 
         qty_to_use = min(qty_to_use, remaining_today)
         if qty_to_use <= 0:
-            return ShopResult(False, f"You can’t use any more {name} today.")
+            return ShopResult(False, f"You can't use any more {name} today.")
 
-        # Apply use: decrement inventory + increment daily uses
         new_qty = await self._shop_repo.add_quantity(user_id=user.id, item_key=key, delta=-qty_to_use)
         await self._shop_repo.increment_used_today(user_id=user.id, item_key=key, day_utc=day, delta=qty_to_use)
 
-        # Flavor (no gameplay advantage yet)
-        if key == "coffee":
-            msg = f"☕ You drink **{qty_to_use}×** Coffee. Productivity +100% (emotionally)."
-        elif key == "tea":
-            msg = f"🍵 You sip **{qty_to_use}×** Tea. Inner peace +1."
-        elif key == "cookie":
-            msg = f"🍪 You eat **{qty_to_use}×** Cookie. Good vibes only."
-        else:
-            msg = f"Used **{qty_to_use}×** {name}."
+        # Flavor messages — English and Dutch items
+        flavor: dict[str, str] = {
+            "coffee":          f"☕ You drink **{qty_to_use}×** Coffee. Productivity +100% (emotionally).",
+            "tea":             f"🍵 You sip **{qty_to_use}×** Tea. Inner peace +1.",
+            "cookie":          f"🍪 You eat **{qty_to_use}×** Cookie. Good vibes only.",
+            "stroopwafel":     f"🧇 You place **{qty_to_use}×** Stroopwafel on your coffee. Worth the wait.",
+            "nl_stroopwafel":  f"🧇 Je legt **{qty_to_use}×** stroopwafel op je koffie. Geduld is een schone zaak.",
+            "nl_hagelslag":    f"🍫 Je eet **{qty_to_use}×** boterham met hagelslag. Welkom in Nederland.",
+            "nl_drop":         f"🖤 Je eet **{qty_to_use}×** dropje. Sterk spul.",
+            "nl_koffie":       f"☕ Je drinkt **{qty_to_use}×** koffie. Met een koekje dat je eigenlijk niet mocht eten.",
+            "nl_beschuit":     f"🥐 Je eet **{qty_to_use}×** beschuit met muisjes. Gefeliciteerd met jezelf.",
+            "nl_kaasje":       f"🧀 Je eet **{qty_to_use}×** kaasje. Gouda, uiteraard.",
+            "nl_fiets":        f"🚲 Je rijdt op je symbolische fiets. Vooruit, op eigen tempo.",
+        }
+        msg = flavor.get(key, f"Used **{qty_to_use}×** {name}.")
 
         return ShopResult(True, msg, new_quantity=int(new_qty))
