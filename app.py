@@ -98,6 +98,7 @@ async def main() -> None:
                 english_game_keys=english_game_keys,
                 limit=10,
                 debounce_seconds=10.0,
+                board_key="dutch_dropdown_v1",
             ),
             leaderboard_repo=leaderboard_repo,
             posts_repo=leaderboard_posts_repo,

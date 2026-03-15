@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -21,6 +21,7 @@ class LeaderboardConfig:
     english_game_keys: list[str]
     limit: int = 10
     debounce_seconds: float = 10.0
+    board_key: str = "english_dropdown_v1"  # must be unique per publisher instance
 
 
 class LeaderboardPublisher:
@@ -31,9 +32,8 @@ class LeaderboardPublisher:
       - All Time (global beans balance)
 
     Uses leaderboard_posts to persist the message ID across restarts.
+    board_key must be unique per channel so Dutch and English don't share a message ID.
     """
-
-    BOARD_KEY = "english_dropdown_v1"
 
     def __init__(
         self,
@@ -49,30 +49,25 @@ class LeaderboardPublisher:
         self._bot: Optional[discord.Client] = None
         self._lock = asyncio.Lock()
 
-        # Debounce state
         self._pending_task: Optional[asyncio.Task] = None
-        self._scheduled_at: Optional[float] = None  # loop.time()
+        self._scheduled_at: Optional[float] = None
 
     def set_bot(self, bot: discord.Client) -> None:
         self._bot = bot
-        logger.info("LeaderboardPublisher attached to bot. Target channel_id=%s", self._config.channel_id)
-
-        # Register persistent dropdown view so it stays interactive after restarts
+        logger.info(
+            "LeaderboardPublisher attached to bot. channel_id=%s board_key=%s",
+            self._config.channel_id,
+            self._config.board_key,
+        )
         try:
             bot.add_view(self.build_persistent_view())
         except Exception:
-            # add_view can only be called once per identical persistent view in some setups;
-            # swallow safely but log.
             logger.debug("LeaderboardPublisher: add_view failed (likely already registered)", exc_info=True)
 
     def build_persistent_view(self) -> discord.ui.View:
         return LeaderboardDropdownView(publisher=self)
 
     def schedule_refresh(self) -> None:
-        """
-        Debounced refresh: schedule an update to occur debounce_seconds after the LAST change.
-        If called repeatedly, it cancels the previous task and reschedules.
-        """
         if not self._bot:
             logger.warning("LeaderboardPublisher.schedule_refresh called but bot is not set.")
             return
@@ -85,30 +80,25 @@ class LeaderboardPublisher:
                 logger.warning("LeaderboardPublisher.schedule_refresh: no running loop")
                 return
 
-        # Cancel previous pending refresh and reschedule
         if self._pending_task and not self._pending_task.done():
             self._pending_task.cancel()
 
         delay = float(self._config.debounce_seconds)
         self._scheduled_at = loop.time() + delay
-        logger.info("Leaderboard refresh scheduled in %.1fs", delay)
+        logger.info("Leaderboard refresh scheduled in %.1fs (board_key=%s)", delay, self._config.board_key)
 
         async def runner() -> None:
             try:
-                # Sleep until scheduled time (supports reschedule by cancel/recreate)
                 await asyncio.sleep(delay)
                 await self.refresh_now(default_tab="today")
             except asyncio.CancelledError:
-                # Normal: a newer change re-scheduled the refresh
                 return
             except Exception:
                 logger.exception("LeaderboardPublisher debounced refresh crashed")
 
-        # Create task on bot loop
         try:
             self._pending_task = loop.create_task(runner())
         except Exception:
-            # Fallback
             self._pending_task = asyncio.create_task(runner())
 
     @staticmethod
@@ -125,19 +115,21 @@ class LeaderboardPublisher:
     def _fmt_sqlite(dt: datetime) -> str:
         return dt.strftime("%Y-%m-%d %H:%M:%S")
 
+    def _is_dutch(self) -> bool:
+        return self._config.board_key == "dutch_dropdown_v1"
+
     async def refresh_now(self, default_tab: str = "today") -> None:
         async with self._lock:
             if not self._bot:
-                logger.warning("LeaderboardPublisher.refresh_now called but bot is not set.")
+                logger.warning("LeaderboardPublisher.refresh_now called but bot is not set. board_key=%s", self._config.board_key)
                 return
 
-            # Fetch channel
             channel = self._bot.get_channel(self._config.channel_id)
             if channel is None:
                 try:
                     channel = await self._bot.fetch_channel(self._config.channel_id)
                 except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-                    logger.exception("Failed to fetch leaderboard channel")
+                    logger.exception("Failed to fetch leaderboard channel channel_id=%s", self._config.channel_id)
                     return
 
             if not isinstance(channel, (discord.TextChannel, discord.Thread)):
@@ -149,18 +141,20 @@ class LeaderboardPublisher:
 
             msg_id = await self._upsert_single_message(channel=channel, embed=embed, view=view)
             if msg_id:
-                logger.info("Leaderboard message updated (message_id=%s)", msg_id)
+                logger.info("Leaderboard message updated (message_id=%s board_key=%s)", msg_id, self._config.board_key)
             else:
-                logger.warning("Leaderboard message update failed (no message_id returned)")
+                logger.warning("Leaderboard message update failed (no message_id returned) board_key=%s", self._config.board_key)
 
     async def build_embed(self, tab: str) -> discord.Embed:
         tab = (tab or "today").lower().strip()
         if tab not in {"today", "week", "all_time"}:
             tab = "today"
 
+        dutch = self._is_dutch()
+
         if tab == "all_time":
             rows = await self._leaderboard_repo.get_global_leaderboard(limit=self._config.limit)
-            return self._embed_all_time(rows)
+            return self._embed_all_time(rows, dutch=dutch)
 
         if tab == "week":
             since = self._fmt_sqlite(self._utc_start_of_week_monday())
@@ -169,7 +163,8 @@ class LeaderboardPublisher:
                 english_game_keys=self._config.english_game_keys,
                 limit=self._config.limit,
             )
-            return self._embed_period(title="🗓️ English Games — This Week", since_label=since, rows=rows)
+            title = "🗓️ Nederlandse Spellen — Deze Week" if dutch else "🗓️ English Games — This Week"
+            return self._embed_period(title=title, since_label=since, rows=rows, dutch=dutch)
 
         # today default
         since = self._fmt_sqlite(self._utc_start_of_today())
@@ -178,34 +173,46 @@ class LeaderboardPublisher:
             english_game_keys=self._config.english_game_keys,
             limit=self._config.limit,
         )
-        return self._embed_period(title="📅 English Games — Today", since_label=since, rows=rows)
+        title = "📅 Nederlandse Spellen — Vandaag" if dutch else "📅 English Games — Today"
+        return self._embed_period(title=title, since_label=since, rows=rows, dutch=dutch)
 
-    def _embed_period(self, *, title: str, since_label: str, rows: list[dict[str, Any]]) -> discord.Embed:
-        embed = discord.Embed(
-            title=title,
-            description=f"Beans earned in English games since **{since_label} UTC**",
+    def _embed_period(
+        self, *, title: str, since_label: str, rows: list[dict[str, Any]], dutch: bool = False
+    ) -> discord.Embed:
+        desc = (
+            f"Bonen verdiend in spellen sinds **{since_label} UTC**"
+            if dutch else
+            f"Beans earned in English games since **{since_label} UTC**"
         )
+        embed = discord.Embed(title=title, description=desc)
+
         if not rows:
-            embed.add_field(name="Top players", value="Play an English game to appear here!", inline=False)
+            value = "Speel een spel om hier te verschijnen! 🎮" if dutch else "Play an English game to appear here!"
+            embed.add_field(name="Top spelers" if dutch else "Top players", value=value, inline=False)
             return embed
 
         lines: list[str] = []
         for i, r in enumerate(rows, start=1):
             discord_user_id = str(r["discord_user_id"])
             total_beans = int(r["total_beans"])
-            lines.append(f"**{i}.** <@{discord_user_id}> — **{total_beans}** beans")
+            unit = "bonen" if dutch else "beans"
+            lines.append(f"**{i}.** <@{discord_user_id}> — **{total_beans}** {unit}")
 
-        embed.add_field(name="Top players", value="\n".join(lines), inline=False)
-        embed.set_footer(text="Use the dropdown to switch period.")
+        embed.add_field(name="Top spelers" if dutch else "Top players", value="\n".join(lines), inline=False)
+        embed.set_footer(text="Gebruik het menu om van periode te wisselen." if dutch else "Use the dropdown to switch period.")
         return embed
 
-    def _embed_all_time(self, rows: list[Any]) -> discord.Embed:
-        embed = discord.Embed(
-            title="🏆 Global Beans — All Time",
-            description="Ranked by current bean balance.",
-        )
+    def _embed_all_time(self, rows: list[Any], dutch: bool = False) -> discord.Embed:
+        title = "🏆 Totale Bonen — Alltime" if dutch else "🏆 Global Beans — All Time"
+        desc = "Gerangschikt op huidige bonensaldo." if dutch else "Ranked by current bean balance."
+        embed = discord.Embed(title=title, description=desc)
+
         if not rows:
-            embed.add_field(name="Top players", value="No data yet.", inline=False)
+            embed.add_field(
+                name="Top spelers" if dutch else "Top players",
+                value="Nog geen data." if dutch else "No data yet.",
+                inline=False,
+            )
             return embed
 
         lines: list[str] = []
@@ -213,10 +220,11 @@ class LeaderboardPublisher:
             name = row.display_name
             if isinstance(name, str) and name.isdigit():
                 name = f"<@{name}>"
-            lines.append(f"**{i}.** {name} — **{row.balance}** beans")
+            unit = "bonen" if dutch else "beans"
+            lines.append(f"**{i}.** {name} — **{row.balance}** {unit}")
 
-        embed.add_field(name="Top players", value="\n".join(lines), inline=False)
-        embed.set_footer(text="Use the dropdown to switch period.")
+        embed.add_field(name="Top spelers" if dutch else "Top players", value="\n".join(lines), inline=False)
+        embed.set_footer(text="Gebruik het menu om van periode te wisselen." if dutch else "Use the dropdown to switch period.")
         return embed
 
     async def _upsert_single_message(
@@ -228,11 +236,12 @@ class LeaderboardPublisher:
     ) -> Optional[int]:
         platform = self._config.platform
         channel_id_str = str(self._config.channel_id)
+        board_key = self._config.board_key
 
         msg_id = await self._posts_repo.get_message_id(
             platform=platform,
             channel_id=channel_id_str,
-            board_key=self.BOARD_KEY,
+            board_key=board_key,
         )
 
         if msg_id:
@@ -241,14 +250,13 @@ class LeaderboardPublisher:
                 await msg.edit(embed=embed, view=view)
                 return msg.id
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                logger.warning("Leaderboard message exists but could not be edited; will recreate.")
-                # fall through to recreate
+                logger.warning("Leaderboard message could not be edited; recreating. board_key=%s", board_key)
 
         sent = await channel.send(embed=embed, view=view)
         await self._posts_repo.upsert_message_id(
             platform=platform,
             channel_id=channel_id_str,
-            board_key=self.BOARD_KEY,
+            board_key=board_key,
             message_id=sent.id,
         )
         return sent.id
@@ -257,17 +265,31 @@ class LeaderboardPublisher:
 class LeaderboardDropdown(discord.ui.Select):
     def __init__(self, publisher: LeaderboardPublisher) -> None:
         self._publisher = publisher
-        options = [
-            discord.SelectOption(label="Today", value="today", emoji="📅", description="English games — today"),
-            discord.SelectOption(label="This Week", value="week", emoji="🗓️", description="English games — this week"),
-            discord.SelectOption(label="All Time", value="all_time", emoji="🏆", description="Global bean balance"),
-        ]
+        dutch = publisher._is_dutch()
+
+        if dutch:
+            options = [
+                discord.SelectOption(label="Vandaag", value="today", emoji="📅", description="Spellen — vandaag"),
+                discord.SelectOption(label="Deze Week", value="week", emoji="🗓️", description="Spellen — deze week"),
+                discord.SelectOption(label="Alltime", value="all_time", emoji="🏆", description="Totale bonen"),
+            ]
+            custom_id = "leaderboard:dropdown:nl:v1"
+            placeholder = "Bekijk scorebord…"
+        else:
+            options = [
+                discord.SelectOption(label="Today", value="today", emoji="📅", description="English games — today"),
+                discord.SelectOption(label="This Week", value="week", emoji="🗓️", description="English games — this week"),
+                discord.SelectOption(label="All Time", value="all_time", emoji="🏆", description="Global bean balance"),
+            ]
+            custom_id = "leaderboard:dropdown:v1"
+            placeholder = "View leaderboard…"
+
         super().__init__(
-            placeholder="View leaderboard…",
+            placeholder=placeholder,
             min_values=1,
             max_values=1,
             options=options,
-            custom_id="leaderboard:dropdown:v1",
+            custom_id=custom_id,
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
