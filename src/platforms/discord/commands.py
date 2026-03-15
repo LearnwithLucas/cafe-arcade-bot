@@ -489,6 +489,108 @@ class GamesCommands(app_commands.Group):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+
+    @app_commands.command(name="wordle_nl_start", description="Start het dagelijkse Woordle (Nederlands)")
+    async def wordle_nl_start(self, interaction: discord.Interaction) -> None:
+        wordle_nl = self.services.get("wordle_nl")
+        if not wordle_nl:
+            await interaction.response.send_message("Woordle NL is niet beschikbaar.", ephemeral=True)
+            return
+        await wordle_nl.start_in_channel(channel_id=interaction.channel_id)
+        embed = discord.Embed(
+            title="🧩 Woordle — Dagelijks",
+            description=(
+                "• 5-letter woorden\n"
+                "• 12 pogingen\n\n"
+                "🟩 goede plek\n"
+                "🟨 verkeerde plek\n"
+                "🟥 niet in woord\n\n"
+                "**Hint:** `/games wordle_nl_hint` (één keer)\n\n"
+                "**Typ je eerste woord:**"
+            ),
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="wordle_nl_hint", description="Gebruik je Woordle hint")
+    async def wordle_nl_hint(self, interaction: discord.Interaction) -> None:
+        wordle_nl = self.services.get("wordle_nl")
+        if not wordle_nl:
+            await interaction.response.send_message("Woordle NL is niet beschikbaar.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        ok, msg = await wordle_nl.use_hint(
+            channel=interaction.channel,
+            channel_id=interaction.channel_id,
+            player_id=interaction.user.id,
+        )
+        await interaction.followup.send(("💡 " if ok else "❌ ") + msg, ephemeral=True)
+
+    @app_commands.command(name="wordle_nl_restart", description="Herstart Woordle in dit kanaal")
+    async def wordle_nl_restart(self, interaction: discord.Interaction) -> None:
+        wordle_nl = self.services.get("wordle_nl")
+        if not wordle_nl:
+            await interaction.response.send_message("Woordle NL is niet beschikbaar.", ephemeral=True)
+            return
+        await wordle_nl.restart_in_channel(channel_id=interaction.channel_id)
+        await interaction.response.send_message("🔁 Woordle herstart.", ephemeral=False)
+
+    @app_commands.command(name="ontwar_start", description="Start Ontwar het Woord (Nederlands)")
+    async def ontwar_start(self, interaction: discord.Interaction) -> None:
+        unscramble_nl = self.services.get("unscramble_nl")
+        if not unscramble_nl:
+            await interaction.response.send_message("Ontwar het Woord is niet beschikbaar.", ephemeral=True)
+            return
+        if not isinstance(interaction.channel, (discord.TextChannel, discord.Thread)):
+            await interaction.response.send_message("Dit kan alleen in een server tekstkanaal.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        await unscramble_nl.start_for_user(channel=interaction.channel, user=interaction.user)
+        await interaction.followup.send("🔀 Ontwar het Woord gestart! Bekijk het kanaal voor je puzzel.", ephemeral=True)
+
+    @app_commands.command(name="ontwar_hint", description="Onthul de eerste letter (één keer)")
+    async def ontwar_hint(self, interaction: discord.Interaction) -> None:
+        unscramble_nl = self.services.get("unscramble_nl")
+        if not unscramble_nl:
+            await interaction.response.send_message("Ontwar het Woord is niet beschikbaar.", ephemeral=True)
+            return
+        if not isinstance(interaction.channel, (discord.TextChannel, discord.Thread)):
+            await interaction.response.send_message("Dit kan alleen in een server tekstkanaal.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        await unscramble_nl.hint_for_user(channel=interaction.channel, user=interaction.user)
+        await interaction.followup.send("💡 Hint toegepast.", ephemeral=True)
+
+    @app_commands.command(name="ontwar_stop", description="Stop je huidige Ontwar ronde")
+    async def ontwar_stop(self, interaction: discord.Interaction) -> None:
+        unscramble_nl = self.services.get("unscramble_nl")
+        if not unscramble_nl:
+            await interaction.response.send_message("Ontwar het Woord is niet beschikbaar.", ephemeral=True)
+            return
+        if not isinstance(interaction.channel, (discord.TextChannel, discord.Thread)):
+            await interaction.response.send_message("Dit kan alleen in een server tekstkanaal.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        await unscramble_nl.stop_for_user(channel=interaction.channel, user=interaction.user)
+        await interaction.followup.send("🛑 Ontwar het Woord gestopt.", ephemeral=True)
+
+    @app_commands.command(name="woordketting_start", description="Start een Woordketting ronde")
+    async def woordketting_start(self, interaction: discord.Interaction) -> None:
+        word_chain_nl = self.services.get("word_chain_nl")
+        if not word_chain_nl:
+            await interaction.response.send_message("Woordketting is niet beschikbaar.", ephemeral=True)
+            return
+        embed = discord.Embed(
+            title="🔤 Woordketting — Live Ronde",
+            description="**Typ je eerste woord:**",
+        )
+        await interaction.response.send_message(embed=embed)
+        status_msg = await interaction.original_response()
+        await word_chain_nl.start_in_channel(
+            channel_id=interaction.channel_id,
+            status_message_id=status_msg.id,
+        )
+
+
 # =====================
 # SETUP
 # =====================

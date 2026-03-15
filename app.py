@@ -37,6 +37,10 @@ from src.services.geo_quiz_bank import GeoQuizBank
 from src.games.geoguessr.flags_game import GeoFlagsGame
 from src.games.geoguessr.language_game import GeoLanguageGame
 
+from src.games.dutch.wordle_nl import DutchWordleGame
+from src.games.dutch.unscramble_nl import DutchUnscrambleGame
+from src.games.dutch.word_chain_nl import DutchWordChainGame
+
 from src.platforms.discord.bot import build_discord_bot
 
 
@@ -49,9 +53,14 @@ GEO_LEARNING_CHANNEL_ID = 0
 GEO_FLAGS_CHANNEL_ID = 1481763185668395263
 GEO_LANGUAGE_CHANNEL_ID = 1481763326164865087
 
+# ---- Channel IDs (Discord — Dutch server) ----
+DUTCH_WORDLE_CHANNEL_ID = 1482763022173995119
+DUTCH_UNSCRAMBLE_CHANNEL_ID = 1482763069238153419
+DUTCH_WORD_CHAIN_CHANNEL_ID = 1482763114842816765
+
 # ---- Assets ----
 WORDS_TXT_PATH = Path("src/assets/words_en.txt")
-
+WORDS_NL_TXT_PATH = Path("src/assets/words_nl.txt")
 
 async def main() -> None:
     settings = Settings.load()
@@ -65,6 +74,9 @@ async def main() -> None:
     # --- Load word list ---
     wordlist = WordList.load_from_txt(WORDS_TXT_PATH)
 
+    # --- Load Dutch word list ---
+    wordlist_nl = WordList.load_from_txt(WORDS_NL_TXT_PATH)
+
     # --- Repositories ---
     users_repo = UsersRepository(db)
     economy_repo = EconomyRepository(db)
@@ -75,6 +87,7 @@ async def main() -> None:
 
     # --- English leaderboard publisher ---
     english_game_keys = ["word_chain", "wordle", "unscramble"]
+    dutch_game_keys = ["word_chain_nl", "wordle_nl", "unscramble_nl"]
 
     leaderboard_publisher = LeaderboardPublisher(
         config=LeaderboardConfig(
@@ -95,7 +108,7 @@ async def main() -> None:
             config=LeaderboardConfig(
                 platform="discord",
                 channel_id=int(settings.dutch_channel_progress),
-                english_game_keys=english_game_keys,
+                english_game_keys=dutch_game_keys,
                 limit=10,
                 debounce_seconds=10.0,
                 board_key="dutch_dropdown_v1",
@@ -202,6 +215,45 @@ async def main() -> None:
         leaderboard_publisher=leaderboard_publisher,
     )
     game_registry.register(unscramble)
+
+    # --- Games: Dutch Wordle ---
+    wordle_nl = DutchWordleGame(
+        games_repo=games_repo,
+        users_repo=users_repo,
+        economy=economy_service,
+        rewards=rewards,
+        cooldowns=cooldowns,
+        wordlist=wordlist_nl,
+        allowed_channel_ids={DUTCH_WORDLE_CHANNEL_ID},
+        leaderboard_publisher=dutch_leaderboard_publisher,
+    )
+    game_registry.register(wordle_nl)
+
+    # --- Games: Dutch Unscramble ---
+    unscramble_nl = DutchUnscrambleGame(
+        games_repo=games_repo,
+        users_repo=users_repo,
+        economy=economy_service,
+        rewards=rewards,
+        cooldowns=cooldowns,
+        wordlist=wordlist_nl,
+        allowed_channel_ids={DUTCH_UNSCRAMBLE_CHANNEL_ID},
+        leaderboard_publisher=dutch_leaderboard_publisher,
+    )
+    game_registry.register(unscramble_nl)
+
+    # --- Games: Dutch Word Chain ---
+    word_chain_nl = DutchWordChainGame(
+        games_repo=games_repo,
+        users_repo=users_repo,
+        economy=economy_service,
+        rewards=rewards,
+        cooldowns=cooldowns,
+        wordlist=wordlist_nl,
+        allowed_channel_ids={DUTCH_WORD_CHAIN_CHANNEL_ID},
+        leaderboard_publisher=dutch_leaderboard_publisher,
+    )
+    game_registry.register(word_chain_nl)
 
     # --- Games: Geo Learning ---
     geo_learning_bank = GeoLearningBank()
