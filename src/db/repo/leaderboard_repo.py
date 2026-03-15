@@ -4,14 +4,15 @@ from typing import Any
 
 from src.db.connection import Database
 from src.domain.models import LeaderboardRow
+from src.db.repo.economy_repo import GUILD_EN
 
 
 class LeaderboardRepository:
     """
     Leaderboards:
-    - All-time global beans: ranked by bean_accounts.balance
-    - Period leaderboards (today/week) for English games: ranked by SUM(bean_transactions.delta)
-      filtered to english_game_keys and since_ts_utc (UTC).
+    - All-time global beans: ranked by bean_accounts.balance, scoped by guild_id
+    - Period leaderboards (today/week): ranked by SUM(bean_transactions.delta),
+      filtered to game_keys, since_ts_utc, and guild_id
     """
 
     def __init__(self, db: Database) -> None:
@@ -21,7 +22,9 @@ class LeaderboardRepository:
     # All-time (global beans balance)
     # -------------------------
 
-    async def get_global_leaderboard(self, *, limit: int = 10) -> list[LeaderboardRow]:
+    async def get_global_leaderboard(
+        self, *, limit: int = 10, guild_id: str = GUILD_EN
+    ) -> list[LeaderboardRow]:
         limit = max(1, min(50, int(limit)))
 
         rows = await self._db.fetchall(
@@ -32,10 +35,11 @@ class LeaderboardRepository:
                 a.balance AS balance
             FROM bean_accounts a
             JOIN users u ON u.id = a.user_id
+            WHERE a.guild_id = ?
             ORDER BY a.balance DESC, u.id ASC
             LIMIT ?
             """,
-            (limit,),
+            (guild_id, limit),
         )
 
         return [
@@ -47,7 +51,9 @@ class LeaderboardRepository:
             for r in rows
         ]
 
-    async def get_user_rank(self, *, user_id: int) -> dict[str, Any] | None:
+    async def get_user_rank(
+        self, *, user_id: int, guild_id: str = GUILD_EN
+    ) -> dict[str, Any] | None:
         row = await self._db.fetchone(
             """
             SELECT
@@ -57,11 +63,12 @@ class LeaderboardRepository:
                     SELECT COUNT(*)
                     FROM bean_accounts a2
                     WHERE a2.balance > a.balance
+                      AND a2.guild_id = ?
                 ) + 1 AS rank
             FROM bean_accounts a
-            WHERE a.user_id = ?
+            WHERE a.user_id = ? AND a.guild_id = ?
             """,
-            (user_id,),
+            (guild_id, user_id, guild_id),
         )
         if not row:
             return None
@@ -73,7 +80,7 @@ class LeaderboardRepository:
         }
 
     # -------------------------
-    # Period leaderboards (English games beans earned)
+    # Period leaderboards
     # -------------------------
 
     async def get_english_earned_since(
@@ -82,18 +89,14 @@ class LeaderboardRepository:
         since_ts_utc: str,
         english_game_keys: list[str],
         limit: int = 10,
+        guild_id: str = GUILD_EN,
     ) -> list[dict[str, Any]]:
         """
         Returns rows like:
           { "discord_user_id": "123...", "total_beans": 42 }
 
-        This is computed from the economy ledger:
-          SUM(bean_transactions.delta) since since_ts_utc
-        filtered to english_game_keys, Discord users only.
-
-        Notes:
-        - We count only positive deltas as "earned" (so penalties won't reduce earnings).
-        - SQLite datetime('now') is UTC; bean_transactions.created_at should be UTC if created that way.
+        Sums positive bean_transactions.delta since since_ts_utc,
+        filtered to game_keys and guild_id.
         """
         limit = max(1, min(50, int(limit)))
         if not english_game_keys:
@@ -110,12 +113,13 @@ class LeaderboardRepository:
             JOIN users u ON u.id = bt.user_id
             WHERE bt.created_at >= ?
               AND bt.game_key IN ({placeholders})
+              AND bt.guild_id = ?
               AND u.discord_user_id IS NOT NULL
             GROUP BY u.discord_user_id
             ORDER BY total_beans DESC
             LIMIT ?
             """,
-            (since_ts_utc, *english_game_keys, limit),
+            (since_ts_utc, *english_game_keys, guild_id, limit),
         )
 
         out: list[dict[str, Any]] = []
