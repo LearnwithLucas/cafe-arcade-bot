@@ -26,23 +26,21 @@ class ArcadeDiscordBot(discord.Client):
         await setup_commands(self)
         await setup_events(self)
 
-        # Attach bot to leaderboard publisher + register persistent dropdown view
+        # Attach English leaderboard publisher (set_bot handles add_view internally)
         publisher = self.services.get("leaderboard_publisher")
         if publisher:
             try:
                 publisher.set_bot(self)
-                self.add_view(publisher.build_persistent_view())
             except Exception:
-                logger.exception("Failed to attach bot to leaderboard publisher / add view")
+                logger.exception("Failed to attach bot to English leaderboard publisher")
 
-        # Attach bot to Dutch leaderboard publisher too
+        # Attach Dutch leaderboard publisher (set_bot handles add_view internally)
         dutch_publisher = self.services.get("dutch_leaderboard_publisher")
         if dutch_publisher:
             try:
                 dutch_publisher.set_bot(self)
-                self.add_view(dutch_publisher.build_persistent_view())
             except Exception:
-                logger.exception("Failed to attach bot to Dutch leaderboard publisher / add view")
+                logger.exception("Failed to attach bot to Dutch leaderboard publisher")
 
         top = self.tree.get_commands()
         logger.info(
