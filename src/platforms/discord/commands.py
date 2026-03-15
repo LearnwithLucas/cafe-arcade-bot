@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # =====================
 # CHANNEL IDS (DISCORD)
-# Both English and Dutch bean channels are accepted everywhere.
+# Both English and Dutch bean channels are accepted.
 # =====================
 BEAN_COUNTER_CHANNEL_IDS = {
     1481764812248842280,  # 🧮 bean-counter (English)
@@ -42,11 +42,11 @@ def _has_service(services: dict[str, Any], key: str) -> bool:
 
 
 # =====================
-# CORE COMMANDS
+# CAFE COMMANDS (/cafe)
 # =====================
-class CoreCommands(app_commands.Group):
+class CafeCommands(app_commands.Group):
     def __init__(self, bot: discord.Client, services: dict[str, Any]) -> None:
-        super().__init__(name="core", description="Core bot commands")
+        super().__init__(name="cafe", description="Café bot commands")
         self.bot = bot
         self.services = services
 
@@ -91,7 +91,7 @@ class CoreCommands(app_commands.Group):
         )
         await interaction.response.send_message(f"☕ You have **{balance}** beans.", ephemeral=True)
 
-    @app_commands.command(name="wallet", description="Show your current bean balance (alias of /core beans)")
+    @app_commands.command(name="wallet", description="Show your current bean balance (alias of /cafe beans)")
     async def wallet(self, interaction: discord.Interaction) -> None:
         economy = self.services.get("economy")
         if economy is None:
@@ -130,7 +130,7 @@ class CoreCommands(app_commands.Group):
 
         location_id = str(interaction.guild_id or interaction.channel_id)
         allowed, remaining = cooldowns.try_acquire(
-            action="core.daily",
+            action="cafe.daily",
             user_id=interaction.user.id,
             location_id=location_id,
             cooldown_seconds=24 * 60 * 60,
@@ -147,7 +147,7 @@ class CoreCommands(app_commands.Group):
             user_id=interaction.user.id,
             amount=amount,
             reason="Daily claim",
-            game_key="core",
+            game_key="cafe",
             display_name=interaction.user.display_name,
         )
 
@@ -183,7 +183,7 @@ class CoreCommands(app_commands.Group):
 
         location_id = str(interaction.guild_id or interaction.channel_id)
         allowed, remaining = cooldowns.try_acquire(
-            action="core.work",
+            action="cafe.work",
             user_id=interaction.user.id,
             location_id=location_id,
             cooldown_seconds=60 * 60,
@@ -201,7 +201,7 @@ class CoreCommands(app_commands.Group):
             user_id=interaction.user.id,
             amount=amount,
             reason="Work",
-            game_key="core",
+            game_key="cafe",
             display_name=interaction.user.display_name,
         )
 
@@ -221,13 +221,13 @@ class CoreCommands(app_commands.Group):
             return
 
         embed = discord.Embed(
-            title="☕ Bean Bot — Help",
+            title="☕ Café Bot — Help",
             description=(
                 "**Economy**\n"
-                "`/core daily` — 25 beans (once/day)\n"
-                "`/core work` — 5 beans (once/hour)\n"
-                "`/core beans` — check balance\n"
-                "`/core wallet` — alias for beans\n\n"
+                "`/cafe daily` — 25 beans (once/day)\n"
+                "`/cafe work` — 5 beans (once/hour)\n"
+                "`/cafe beans` — check balance\n"
+                "`/cafe wallet` — alias for beans\n\n"
                 "**Games**\n"
                 "`/games wordle_start` — daily Wordle\n"
                 "`/games wordle_hint` — reveal a hint\n"
@@ -237,7 +237,7 @@ class CoreCommands(app_commands.Group):
                 "`/shop` — browse and buy items\n"
                 "`/inventory` — view owned items\n\n"
                 "**Leaderboard**\n"
-                "`/core leaderboard` — refresh the leaderboard\n"
+                "`/cafe leaderboard` — refresh the leaderboard\n"
             ),
         )
         embed.set_thumbnail(url=AssetLinks.BEAN_CURRENCY_ICON)
@@ -293,7 +293,7 @@ class GamesCommands(app_commands.Group):
 
         await wordle.start_in_channel(channel=interaction.channel, channel_id=interaction.channel_id)
         embed = discord.Embed(
-            title="🧩 Wordle — Daily",
+            title="🧩 Wordle — Dagelijks",
             description=(
                 "• 5-letter words\n"
                 "• 12 guesses\n\n"
@@ -427,8 +427,8 @@ async def setup(bot: discord.Client) -> None:
 
     existing = {c.name for c in bot.tree.get_commands()}
 
-    if "core" not in existing:
-        bot.tree.add_command(CoreCommands(bot, services))
+    if "cafe" not in existing:
+        bot.tree.add_command(CafeCommands(bot, services))
     if "games" not in existing:
         bot.tree.add_command(GamesCommands(bot, services))
 
