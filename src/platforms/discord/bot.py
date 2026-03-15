@@ -35,6 +35,15 @@ class ArcadeDiscordBot(discord.Client):
             except Exception:
                 logger.exception("Failed to attach bot to leaderboard publisher / add view")
 
+        # Attach bot to Dutch leaderboard publisher too
+        dutch_publisher = self.services.get("dutch_leaderboard_publisher")
+        if dutch_publisher:
+            try:
+                dutch_publisher.set_bot(self)
+                self.add_view(dutch_publisher.build_persistent_view())
+            except Exception:
+                logger.exception("Failed to attach bot to Dutch leaderboard publisher / add view")
+
         top = self.tree.get_commands()
         logger.info(
             "Tree contains %s top-level commands: %s",
@@ -42,6 +51,7 @@ class ArcadeDiscordBot(discord.Client):
             "|".join(c.name for c in top) if top else "(none)",
         )
 
+        # Sync to English guild
         guild_id = self.settings.discord_guild_id
         try:
             if guild_id:
@@ -49,12 +59,23 @@ class ArcadeDiscordBot(discord.Client):
                 guild = discord.Object(id=gid)
                 self.tree.copy_global_to(guild=guild)
                 synced = await self.tree.sync(guild=guild)
-                logger.info("Synced %s app commands to guild %s", len(synced), gid)
+                logger.info("Synced %s app commands to English guild %s", len(synced), gid)
             else:
                 synced = await self.tree.sync()
                 logger.info("Synced %s app commands globally", len(synced))
         except Exception:
-            logger.exception("Command sync failed")
+            logger.exception("Command sync failed for English guild")
+
+        # Sync to Dutch guild
+        dutch_guild_id = self.settings.dutch_guild_id
+        if dutch_guild_id:
+            try:
+                dutch_guild = discord.Object(id=int(dutch_guild_id))
+                self.tree.copy_global_to(guild=dutch_guild)
+                synced_nl = await self.tree.sync(guild=dutch_guild)
+                logger.info("Synced %s app commands to Dutch guild %s", len(synced_nl), dutch_guild_id)
+            except Exception:
+                logger.exception("Command sync failed for Dutch guild")
 
     async def on_ready(self) -> None:
         logger.info("Discord bot ready: %s (id=%s)", self.user, self.user.id if self.user else "?")

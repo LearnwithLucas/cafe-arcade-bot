@@ -15,7 +15,7 @@ from src.db.repo.leaderboard_repo import LeaderboardRepository
 from src.db.repo.leaderboard_posts_repo import LeaderboardPostsRepository
 from src.db.repo.games_repo import GamesRepository
 
-# --- Shop (NEW) ---
+# --- Shop ---
 from src.db.repo.shop_repo import ShopRepository
 from src.services.shop_service import ShopService
 from src.services.shop_items import ShopItems
@@ -44,18 +44,18 @@ from src.games.geoguessr.language_game import GeoLanguageGame
 from src.platforms.discord.bot import build_discord_bot
 
 
-# ---- Channel IDs (Discord) ----
-WORD_CHAIN_CHANNEL_ID = 1481745881123520573     # CHANGE THIS — word-chain channel
-WORDLE_CHANNEL_ID = 1481745735652474920         # CHANGE THIS — wordle channel
-UNSCRAMBLE_CHANNEL_ID = 1481745817021845607     # CHANGE THIS — unscramble channel
-LEADERBOARD_CHANNEL_ID = 1481746468737126564    # CHANGE THIS — progress channel
+# ---- Channel IDs (Discord — English server) ----
+WORD_CHAIN_CHANNEL_ID = 1481745881123520573
+WORDLE_CHANNEL_ID = 1481745735652474920
+UNSCRAMBLE_CHANNEL_ID = 1481745817021845607
+LEADERBOARD_CHANNEL_ID = 1481746468737126564
 
-# Geo-learning channel (set to your real geo-learning channel id)
-GEO_LEARNING_CHANNEL_ID = 0  # leave as 0 for now — you don't have this channel yet
+# Geo-learning channel (not yet active)
+GEO_LEARNING_CHANNEL_ID = 0
 
-# GeoGuessr arcade channels (Flags / Language)
-GEO_FLAGS_CHANNEL_ID = 1481763185668395263      # CHANGE THIS — geo-flags channel
-GEO_LANGUAGE_CHANNEL_ID = 1481763326164865087   # CHANGE THIS — geo-language channel
+# GeoGuessr arcade channels
+GEO_FLAGS_CHANNEL_ID = 1481763185668395263
+GEO_LANGUAGE_CHANNEL_ID = 1481763326164865087
 
 # ---- Assets ----
 WORDS_TXT_PATH = Path("src/assets/words_en.txt")
@@ -80,10 +80,10 @@ async def main() -> None:
     leaderboard_posts_repo = LeaderboardPostsRepository(db)
     games_repo = GamesRepository(db)
 
-    # --- Shop repo (NEW) ---
+    # --- Shop repo ---
     shop_repo = ShopRepository(db)
 
-    # --- Leaderboard publisher (Discord channel auto-updates) ---
+    # --- English leaderboard publisher ---
     english_game_keys = [
         "word_chain",
         "wordle",
@@ -102,6 +102,21 @@ async def main() -> None:
         posts_repo=leaderboard_posts_repo,
     )
 
+    # --- Dutch leaderboard publisher (#voortgang) ---
+    dutch_leaderboard_publisher = None
+    if settings.dutch_guild_id and settings.dutch_channel_progress:
+        dutch_leaderboard_publisher = LeaderboardPublisher(
+            config=LeaderboardConfig(
+                platform="discord",
+                channel_id=int(settings.dutch_channel_progress),
+                english_game_keys=english_game_keys,
+                limit=10,
+                debounce_seconds=10.0,
+            ),
+            leaderboard_repo=leaderboard_repo,
+            posts_repo=leaderboard_posts_repo,
+        )
+
     # --- Services ---
     rewards = RewardsService()
 
@@ -118,7 +133,7 @@ async def main() -> None:
 
     cooldowns = Cooldowns()
 
-    # --- Shop service (NEW) ---
+    # --- Shop service ---
     shop_service = ShopService(
         users_repo=users_repo,
         economy=economy_service,
@@ -126,7 +141,6 @@ async def main() -> None:
     )
 
     # --- Seed shop catalog (idempotent, DB-backed; safe on Render restarts) ---
-    # This requires migration v4 (shop_items table). If it fails, bot still runs.
     try:
         for it in ShopItems.all().values():
             await shop_repo.upsert_item(
@@ -138,7 +152,6 @@ async def main() -> None:
                 max_inventory=int(it.max_stack),
             )
     except Exception:
-        # Keep startup resilient on first deploy / partial DB states.
         pass
 
     game_registry = GameRegistry()
@@ -192,7 +205,7 @@ async def main() -> None:
         )
         game_registry.register(geo_learning)
 
-    # --- GeoGuessr arcade: shared dataset bank (Render-safe, local JSON + fallback) ---
+    # --- GeoGuessr arcade: shared dataset bank ---
     geo_quiz_bank = GeoQuizBank.load_from_assets()
 
     geo_flags = None
@@ -232,6 +245,7 @@ async def main() -> None:
         "cooldowns": cooldowns,
         "leaderboard": leaderboard_service,
         "leaderboard_publisher": leaderboard_publisher,
+        "dutch_leaderboard_publisher": dutch_leaderboard_publisher,
         "leaderboard_repo": leaderboard_repo,
         "leaderboard_posts_repo": leaderboard_posts_repo,
         "games_repo": games_repo,
@@ -240,7 +254,7 @@ async def main() -> None:
         "word_chain": word_chain,
         "wordle": wordle,
         "unscramble": unscramble,
-        # shop (NEW)
+        # shop
         "shop_repo": shop_repo,
         "shop": shop_service,
         # geo learning

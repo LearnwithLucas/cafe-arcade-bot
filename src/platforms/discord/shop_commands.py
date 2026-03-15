@@ -19,7 +19,6 @@ class _Selected:
 
 def _shop_embed(*, title: str, description: str) -> discord.Embed:
     embed = discord.Embed(title=title, description=description)
-    # Reuse bean icon for now (you can swap to AssetLinks.SHOP_ICON later if you add it)
     embed.set_thumbnail(url=AssetLinks.BEAN_CURRENCY_ICON)
     return embed
 
@@ -95,9 +94,9 @@ class ShopCommands(app_commands.Command):
       - Refresh button to redraw the panel
     """
 
-    def __init__(self, *, services: dict[str, Any], shop_channel_id: int) -> None:
+    def __init__(self, *, services: dict[str, Any], shop_channel_ids: set[int]) -> None:
         self._services = services
-        self._shop_channel_id = int(shop_channel_id)
+        self._shop_channel_ids = {int(c) for c in shop_channel_ids}
 
         async def _callback(interaction: discord.Interaction) -> None:
             await self._open_shop(interaction)
@@ -109,12 +108,12 @@ class ShopCommands(app_commands.Command):
         )
 
     def _in_shop_channel(self, interaction: discord.Interaction) -> bool:
-        return int(getattr(interaction, "channel_id", 0) or 0) == self._shop_channel_id
+        return int(getattr(interaction, "channel_id", 0) or 0) in self._shop_channel_ids
 
     async def _open_shop(self, interaction: discord.Interaction) -> None:
         if not self._in_shop_channel(interaction):
             await interaction.response.send_message(
-                f"Use this in <#{self._shop_channel_id}> 🛍️",
+                "Use this in #bean-shop or #bonen-winkel 🛍️",
                 ephemeral=True,
             )
             return
@@ -132,7 +131,7 @@ class ShopCommands(app_commands.Command):
 
         view = _ShopView(
             services=self._services,
-            shop_channel_id=self._shop_channel_id,
+            shop_channel_ids=self._shop_channel_ids,
             owner_id=interaction.user.id,
             initial_rows=rows,
         )
@@ -155,7 +154,6 @@ class _PurchaseSelect(discord.ui.Select):
             qty = int(r.get("quantity") or 0)
             desc = str(r.get("description") or "")
 
-            # Keep these short for Discord UI limits
             label = (f"{name} — {price} beans").strip()[:100]
             description = (f"Owned: {qty} • " + desc).strip()[:100]
 
@@ -212,14 +210,14 @@ class _ShopView(discord.ui.View):
         self,
         *,
         services: dict[str, Any],
-        shop_channel_id: int,
+        shop_channel_ids: set[int],
         owner_id: int,
         initial_rows: list[dict[str, Any]],
     ) -> None:
         super().__init__(timeout=60 * 15)  # 15 min
 
         self._services = services
-        self._shop_channel_id = int(shop_channel_id)
+        self._shop_channel_ids = {int(c) for c in shop_channel_ids}
         self._owner_id = int(owner_id)
 
         self._selected = _Selected(item_key=None)
@@ -232,8 +230,8 @@ class _ShopView(discord.ui.View):
     def _validate_owner_and_channel(self, interaction: discord.Interaction) -> str | None:
         if interaction.user.id != self._owner_id:
             return "This shop panel belongs to someone else."
-        if int(getattr(interaction, "channel_id", 0) or 0) != self._shop_channel_id:
-            return "Use the shop in the shop channel."
+        if int(getattr(interaction, "channel_id", 0) or 0) not in self._shop_channel_ids:
+            return "Use the shop in #bean-shop or #bonen-winkel."
         return None
 
     async def refresh(self, *, interaction: discord.Interaction, notice: str | None = None) -> None:
@@ -248,19 +246,15 @@ class _ShopView(discord.ui.View):
             display_name=getattr(interaction.user, "display_name", None),
         )
 
-        # rebuild dropdown options to reflect latest state
         await self._refresh_rows(rows)
 
-        # edit the original message in place
         try:
             if interaction.response.is_done():
-                # if we already responded elsewhere, just edit message and optionally follow up
                 if interaction.message:
                     await interaction.message.edit(embed=embed, view=self)
                 if notice:
                     await interaction.followup.send(notice, ephemeral=True)
             else:
-                # respond by editing message (no extra messages in channel)
                 if interaction.message:
                     await interaction.response.edit_message(embed=embed, view=self)
                 else:
@@ -281,7 +275,6 @@ class _ShopView(discord.ui.View):
             await interaction.response.send_message("Shop service not available.", ephemeral=True)
             return
 
-        # Buy exactly 1 on selection (one-click)
         res = await shop.buy_discord(
             discord_user_id=interaction.user.id,
             display_name=getattr(interaction.user, "display_name", None),
@@ -289,10 +282,8 @@ class _ShopView(discord.ui.View):
             quantity=1,
         )
 
-        # Ephemeral confirmation
         await interaction.response.send_message(("✅ " if res.ok else "❌ ") + res.message, ephemeral=True)
 
-        # Refresh the main shop panel without closing it
         try:
             embed, rows = await _render_shop(
                 services=self._services,
@@ -312,7 +303,6 @@ class _ShopView(discord.ui.View):
         keep = self._selected.item_key
         new_select = _PurchaseSelect(rows=self._rows, selected=self._selected)
 
-        # reset selection if item disappeared
         if keep and not any(_key_from_row(r) == keep for r in self._rows):
             self._selected.item_key = None
 

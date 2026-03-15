@@ -24,6 +24,16 @@ class Settings:
     discord_token: str
     discord_guild_id: int | None
 
+    # Dutch Discord server
+    dutch_guild_id: int | None
+    dutch_channel_beans: int | None
+    dutch_channel_beans_help: int | None
+    dutch_channel_beans_shop: int | None
+    dutch_channel_progress: int | None
+    dutch_channel_wordle: int | None
+    dutch_channel_unscramble: int | None
+    dutch_channel_word_chain: int | None
+
     # Telegram (optional for now)
     telegram_token: str | None
 
@@ -46,10 +56,21 @@ class Settings:
         if not discord_token:
             raise RuntimeError("DISCORD_TOKEN is required")
 
-        discord_guild_id_raw = os.getenv("DISCORD_GUILD_ID")
-        discord_guild_id = (
-            int(discord_guild_id_raw) if discord_guild_id_raw else None
-        )
+        def opt_int(name: str) -> int | None:
+            raw = os.getenv(name, "").strip()
+            return int(raw) if raw else None
+
+        discord_guild_id = opt_int("DISCORD_GUILD_ID")
+
+        # Dutch server
+        dutch_guild_id = opt_int("DUTCH_GUILD_ID")
+        dutch_channel_beans = opt_int("DUTCH_CHANNEL_BEANS")
+        dutch_channel_beans_help = opt_int("DUTCH_CHANNEL_BEANS_HELP")
+        dutch_channel_beans_shop = opt_int("DUTCH_CHANNEL_BEANS_SHOP")
+        dutch_channel_progress = opt_int("DUTCH_CHANNEL_PROGRESS")
+        dutch_channel_wordle = opt_int("DUTCH_CHANNEL_WORDLE")
+        dutch_channel_unscramble = opt_int("DUTCH_CHANNEL_UNSCRAMBLE")
+        dutch_channel_word_chain = opt_int("DUTCH_CHANNEL_WORD_CHAIN")
 
         telegram_token = os.getenv("TELEGRAM_TOKEN")
 
@@ -64,6 +85,14 @@ class Settings:
             log_level=log_level,
             discord_token=discord_token,
             discord_guild_id=discord_guild_id,
+            dutch_guild_id=dutch_guild_id,
+            dutch_channel_beans=dutch_channel_beans,
+            dutch_channel_beans_help=dutch_channel_beans_help,
+            dutch_channel_beans_shop=dutch_channel_beans_shop,
+            dutch_channel_progress=dutch_channel_progress,
+            dutch_channel_wordle=dutch_channel_wordle,
+            dutch_channel_unscramble=dutch_channel_unscramble,
+            dutch_channel_word_chain=dutch_channel_word_chain,
             telegram_token=telegram_token,
             db_path=db_path,
         )

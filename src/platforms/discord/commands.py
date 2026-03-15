@@ -21,10 +21,21 @@ logger = logging.getLogger(__name__)
 
 # =====================
 # CHANNEL IDS (DISCORD)
+# Both English and Dutch bean channels are accepted everywhere.
 # =====================
-BEAN_COUNTER_CHANNEL_ID = 1481764812248842280  # 🧮 bean-counter
-BEAN_HELP_CHANNEL_ID = 1481764898496053480      # ❓ bean-help
-BEAN_SHOP_CHANNEL_ID = 1481764947787780298      # 🛍️ bean-shop
+BEAN_COUNTER_CHANNEL_IDS = {
+    1481764812248842280,  # 🧮 bean-counter (English)
+    1482763329293520967,  # 🧮 bonen-teller (Dutch)
+}
+BEAN_HELP_CHANNEL_IDS = {
+    1481764898496053480,  # ❓ bean-help (English)
+    1482763682856439828,  # ❓ bonen-hulp (Dutch)
+}
+BEAN_SHOP_CHANNEL_IDS = {
+    1481764947787780298,  # 🛍️ bean-shop (English)
+    1482763754138501250,  # 🛍️ bonen-winkel (Dutch)
+}
+
 
 def _has_service(services: dict[str, Any], key: str) -> bool:
     return services.get(key) is not None
@@ -43,8 +54,8 @@ class CoreCommands(app_commands.Group):
     # Helpers
     # -------------
 
-    def _in_channel(self, interaction: discord.Interaction, channel_id: int) -> bool:
-        return int(getattr(interaction, "channel_id", 0) or 0) == int(channel_id)
+    def _in_channel(self, interaction: discord.Interaction, channel_ids: set[int]) -> bool:
+        return int(getattr(interaction, "channel_id", 0) or 0) in channel_ids
 
     def _get_rewards(self) -> RewardsService | None:
         r = self.services.get("rewards")
@@ -95,8 +106,11 @@ class CoreCommands(app_commands.Group):
 
     @app_commands.command(name="daily", description="Claim your daily beans (once per day)")
     async def daily(self, interaction: discord.Interaction) -> None:
-        if not self._in_channel(interaction, BEAN_COUNTER_CHANNEL_ID):
-            await interaction.response.send_message(f"Use this in <#{BEAN_COUNTER_CHANNEL_ID}> 🧮", ephemeral=True)
+        if not self._in_channel(interaction, BEAN_COUNTER_CHANNEL_IDS):
+            await interaction.response.send_message(
+                "Use this in #bean-counter or #bonen-teller 🧮",
+                ephemeral=True,
+            )
             return
 
         rewards = self._get_rewards()
@@ -145,8 +159,11 @@ class CoreCommands(app_commands.Group):
 
     @app_commands.command(name="work", description="Work for beans (once per hour)")
     async def work(self, interaction: discord.Interaction) -> None:
-        if not self._in_channel(interaction, BEAN_COUNTER_CHANNEL_ID):
-            await interaction.response.send_message(f"Use this in <#{BEAN_COUNTER_CHANNEL_ID}> 🧮", ephemeral=True)
+        if not self._in_channel(interaction, BEAN_COUNTER_CHANNEL_IDS):
+            await interaction.response.send_message(
+                "Use this in #bean-counter or #bonen-teller 🧮",
+                ephemeral=True,
+            )
             return
 
         rewards = self._get_rewards()
@@ -178,77 +195,74 @@ class CoreCommands(app_commands.Group):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        amount = int(rewards.amount(RewardKey.CORE_WORK))
+        rewards = self._get_rewards()
+        amount = int(rewards.amount(RewardKey.CORE_WORK)) if rewards else 5
         new_balance = await economy.award_beans_discord(
             user_id=interaction.user.id,
             amount=amount,
-            reason="Work payout",
+            reason="Work",
             game_key="core",
             display_name=interaction.user.display_name,
         )
 
         embed = self._bean_embed(
-            title="🛠️ Work complete!",
+            title="💼 Worked!",
             description=(f"<@{interaction.user.id}> earned **{amount} beans**.\n👛 New balance: **{new_balance}** beans."),
         )
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    @app_commands.command(name="help", description="Info about beans, earning, and channels")
+    @app_commands.command(name="help", description="Show all bot commands and rewards")
     async def help(self, interaction: discord.Interaction) -> None:
-        if not self._in_channel(interaction, BEAN_HELP_CHANNEL_ID):
-            await interaction.response.send_message(f"Use this in <#{BEAN_HELP_CHANNEL_ID}> ❓", ephemeral=True)
+        if not self._in_channel(interaction, BEAN_HELP_CHANNEL_IDS):
+            await interaction.response.send_message(
+                "Use this in #bean-help or #bonen-hulp ❓",
+                ephemeral=True,
+            )
             return
 
-        rewards = self._get_rewards()
-
-        def amt(key: str, fallback: int) -> int:
-            try:
-                return int(rewards.amount(key)) if rewards else int(fallback)
-            except Exception:
-                return int(fallback)
-
-        embed = self._bean_embed(
-            title="☕ Beans — Help",
+        embed = discord.Embed(
+            title="☕ Bean Bot — Help",
             description=(
-                "Beans are earned by playing games and using the bean-counter commands.\n\n"
-                f"**Where to use commands**\n"
-                f"• 🧮 Bean Counter: <#{BEAN_COUNTER_CHANNEL_ID}> (`/core daily`, `/core work`)\n"
-                f"• ❓ Bean Help: <#{BEAN_HELP_CHANNEL_ID}>\n"
-                f"• 🛍️ Bean Shop: <#{BEAN_SHOP_CHANNEL_ID}> (`/shop`)\n\n"
-                "**Current rewards**\n"
-                f"• Wordle solve: **{amt(RewardKey.WORDLE_SOLVE, 20)}**\n"
-                f"• Wordle fail: **{amt(RewardKey.WORDLE_FAIL_PER_GREEN, 2)}× best 🟩**\n"
-                f"• Unscramble solve: **{amt(RewardKey.UNSCRAMBLE_SOLVE, 5)}**\n"
-                f"• Unscramble fail: **{amt(RewardKey.UNSCRAMBLE_FAIL_PER_REVEALED, 2)}× revealed letters**\n"
-                f"• Word Chain: **{amt(RewardKey.WORD_CHAIN_ROUND_PAYOUT, 1)}× accepted words**\n"
-                f"• Daily claim: **{amt(RewardKey.CORE_DAILY, 25)}** (once/day)\n"
-                f"• Work: **{amt(RewardKey.CORE_WORK, 5)}** (once/hour)\n\n"
-                "**GeoGuessr**\n"
-                f"• Flags correct: **{amt(RewardKey.GEO_FLAGS_CORRECT, 2)}** (+streak bonus)\n"
-                f"• Language correct: **{amt(RewardKey.GEO_LANGUAGE_CORRECT, 2)}** (+streak bonus)\n"
+                "**Economy**\n"
+                "`/core daily` — 25 beans (once/day)\n"
+                "`/core work` — 5 beans (once/hour)\n"
+                "`/core beans` — check balance\n"
+                "`/core wallet` — alias for beans\n\n"
+                "**Games**\n"
+                "`/games wordle_start` — daily Wordle\n"
+                "`/games wordle_hint` — reveal a hint\n"
+                "`/games unscramble_start` — unscramble a word\n"
+                "`/games wordchain_start` — start word chain\n\n"
+                "**Shop**\n"
+                "`/shop` — browse and buy items\n"
+                "`/inventory` — view owned items\n\n"
+                "**Leaderboard**\n"
+                "`/core leaderboard` — refresh the leaderboard\n"
             ),
         )
+        embed.set_thumbnail(url=AssetLinks.BEAN_CURRENCY_ICON)
         await interaction.response.send_message(embed=embed, ephemeral=False)
 
-    @app_commands.command(name="shop", description="(Deprecated) Use /shop")
-    async def shop(self, interaction: discord.Interaction) -> None:
-        # NOTE: This is /core shop (not /shop). Keeping it as a guide is fine.
-        embed = self._bean_embed(
-            title="🛍️ Bean Shop",
-            description=("Use the shop command:\n" "• `/shop`\n\n" f"Shop channel: <#{BEAN_SHOP_CHANNEL_ID}>"),
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(name="leaderboard", description="Refresh the leaderboard panel (Today view)")
+    @app_commands.command(name="leaderboard", description="Refresh the leaderboard panel")
     async def leaderboard(self, interaction: discord.Interaction) -> None:
         publisher = self.services.get("leaderboard_publisher")
+
+        # Use Dutch publisher if command is run in Dutch guild
+        dutch_guild_id = getattr(getattr(self.bot, "settings", None), "dutch_guild_id", None)
+        if dutch_guild_id and interaction.guild_id == int(dutch_guild_id):
+            publisher = self.services.get("dutch_leaderboard_publisher") or publisher
+
         if not publisher:
-            await interaction.response.send_message("Leaderboard is not available.", ephemeral=True)
+            await interaction.response.send_message("Leaderboard not available.", ephemeral=True)
             return
 
-        await interaction.response.send_message("Refreshing leaderboard…", ephemeral=True)
-        await publisher.refresh_now(default_tab="today")
-        await interaction.followup.send("✅ Leaderboard updated.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await publisher.force_publish()
+            await interaction.followup.send("✅ Leaderboard refreshed.", ephemeral=True)
+        except Exception:
+            logger.exception("Failed to refresh leaderboard")
+            await interaction.followup.send("❌ Failed to refresh leaderboard.", ephemeral=True)
 
 
 # =====================
@@ -256,41 +270,28 @@ class CoreCommands(app_commands.Group):
 # =====================
 class GamesCommands(app_commands.Group):
     def __init__(self, bot: discord.Client, services: dict[str, Any]) -> None:
-        super().__init__(name="games", description="Game commands")
+        super().__init__(name="games", description="Play word games")
         self.bot = bot
         self.services = services
 
-    @app_commands.command(name="wordchain_start", description="Start Word Chain in this channel")
+    @app_commands.command(name="wordchain_start", description="Start a Word Chain round")
     async def wordchain_start(self, interaction: discord.Interaction) -> None:
         word_chain = self.services.get("word_chain")
         if not word_chain:
             await interaction.response.send_message("Word Chain is not available.", ephemeral=True)
             return
 
-        embed = discord.Embed(
-            title="🔤 Word Chain",
-            description=(
-                "**Rules**\n"
-                "• Send an English word\n"
-                "• Next word must start with the **last letter**\n"
-                "• No repeats\n"
-                "• One mistake ends the round\n\n"
-                "**Write your first word:**"
-            ),
-        )
-        await interaction.response.send_message(embed=embed)
-        msg = await interaction.original_response()
-        await word_chain.start_in_channel(channel_id=interaction.channel_id, status_message_id=msg.id)
+        await word_chain.start(channel=interaction.channel, started_by=interaction.user)
+        await interaction.response.send_message("⛓️ Word Chain started! Type a word to begin.", ephemeral=False)
 
-    @app_commands.command(name="wordle_start", description="Start today’s Wordle")
+    @app_commands.command(name="wordle_start", description="Start today's Wordle")
     async def wordle_start(self, interaction: discord.Interaction) -> None:
         wordle = self.services.get("wordle")
         if not wordle:
             await interaction.response.send_message("Wordle is not available.", ephemeral=True)
             return
 
-        await wordle.start_in_channel(channel_id=interaction.channel_id)
-
+        await wordle.start_in_channel(channel=interaction.channel, channel_id=interaction.channel_id)
         embed = discord.Embed(
             title="🧩 Wordle — Daily",
             description=(
@@ -431,14 +432,14 @@ async def setup(bot: discord.Client) -> None:
     if "games" not in existing:
         bot.tree.add_command(GamesCommands(bot, services))
 
-    # Shop (/shop)
+    # Shop (/shop) — accepts both English and Dutch shop channels
     if "shop" not in existing:
         if _has_service(services, "shop"):
-            bot.tree.add_command(ShopCommands(services=services, shop_channel_id=BEAN_SHOP_CHANNEL_ID))
+            bot.tree.add_command(ShopCommands(services=services, shop_channel_ids=BEAN_SHOP_CHANNEL_IDS))
         else:
             logger.warning("shop service not found; /shop commands not registered")
 
-    # Inventory (/inventory) — allowed everywhere by default (pass inventory_channel_id=... to restrict)
+    # Inventory (/inventory) — allowed everywhere by default
     if "inventory" not in existing:
         if _has_service(services, "shop"):
             bot.tree.add_command(InventoryCommands(services=services))
