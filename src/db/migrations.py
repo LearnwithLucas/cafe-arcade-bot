@@ -30,9 +30,6 @@ async def _column_exists(conn, table: str, column: str) -> bool:
 # Migrations
 # -----------------------------
 async def _migration_v1(conn) -> None:
-    """
-    Initial schema.
-    """
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -41,7 +38,6 @@ async def _migration_v1(conn) -> None:
         );
         """
     )
-
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -50,7 +46,6 @@ async def _migration_v1(conn) -> None:
         );
         """
     )
-
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS user_identities (
@@ -66,7 +61,6 @@ async def _migration_v1(conn) -> None:
         );
         """
     )
-
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS bean_accounts (
@@ -78,7 +72,6 @@ async def _migration_v1(conn) -> None:
         );
         """
     )
-
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS bean_transactions (
@@ -93,7 +86,6 @@ async def _migration_v1(conn) -> None:
         );
         """
     )
-
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS game_sessions (
@@ -109,7 +101,6 @@ async def _migration_v1(conn) -> None:
         );
         """
     )
-
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS game_results (
@@ -124,7 +115,6 @@ async def _migration_v1(conn) -> None:
         );
         """
     )
-
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS leaderboard_posts (
@@ -142,25 +132,17 @@ async def _migration_v1(conn) -> None:
 
 
 async def _migration_v2(conn) -> None:
-    """
-    Defensive fixes for existing databases.
-    """
     if await _table_exists(conn, "bean_transactions"):
         if not await _column_exists(conn, "bean_transactions", "metadata"):
             await conn.execute("ALTER TABLE bean_transactions ADD COLUMN metadata TEXT;")
-
         if not await _column_exists(conn, "bean_transactions", "game_key"):
             await conn.execute("ALTER TABLE bean_transactions ADD COLUMN game_key TEXT;")
-
     if await _table_exists(conn, "user_identities"):
         if not await _column_exists(conn, "user_identities", "display_name"):
             await conn.execute("ALTER TABLE user_identities ADD COLUMN display_name TEXT;")
 
 
 async def _migration_v3(conn) -> None:
-    """
-    Shop v1.
-    """
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS shop_inventory (
@@ -173,7 +155,6 @@ async def _migration_v3(conn) -> None:
         );
         """
     )
-
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS shop_item_uses (
@@ -190,9 +171,6 @@ async def _migration_v3(conn) -> None:
 
 
 async def _migration_v4(conn) -> None:
-    """
-    Compatibility + Shop catalog.
-    """
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS active_game_sessions (
@@ -209,7 +187,6 @@ async def _migration_v4(conn) -> None:
         );
         """
     )
-
     try:
         await conn.execute(
             """
@@ -219,13 +196,11 @@ async def _migration_v4(conn) -> None:
         )
     except Exception:
         pass
-
     if await _table_exists(conn, "game_results"):
         if not await _column_exists(conn, "game_results", "context"):
             await conn.execute("ALTER TABLE game_results ADD COLUMN context TEXT;")
         if not await _column_exists(conn, "game_results", "context_json"):
             await conn.execute("ALTER TABLE game_results ADD COLUMN context_json TEXT;")
-
     await conn.execute(
         """
         CREATE TABLE IF NOT EXISTS shop_items (
@@ -240,7 +215,6 @@ async def _migration_v4(conn) -> None:
         );
         """
     )
-
     try:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_shop_inventory_user ON shop_inventory(user_id);")
     except Exception:
@@ -252,64 +226,43 @@ async def _migration_v4(conn) -> None:
 
 
 async def _migration_v5(conn) -> None:
-    """
-    Users table compatibility.
-    """
     if not await _table_exists(conn, "users"):
         return
-
     if not await _column_exists(conn, "users", "discord_user_id"):
         await conn.execute("ALTER TABLE users ADD COLUMN discord_user_id TEXT;")
-
     if not await _column_exists(conn, "users", "telegram_user_id"):
         await conn.execute("ALTER TABLE users ADD COLUMN telegram_user_id TEXT;")
-
     if not await _column_exists(conn, "users", "display_name"):
         await conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT;")
-
     if await _table_exists(conn, "user_identities"):
         await conn.execute(
             """
-            UPDATE users
-               SET discord_user_id = (
-                     SELECT ui.platform_user_id
-                       FROM user_identities ui
-                      WHERE ui.user_id = users.id
-                        AND ui.platform = 'discord'
-                      LIMIT 1
-                   )
-             WHERE discord_user_id IS NULL;
+            UPDATE users SET discord_user_id = (
+                SELECT ui.platform_user_id FROM user_identities ui
+                WHERE ui.user_id = users.id AND ui.platform = 'discord' LIMIT 1
+            ) WHERE discord_user_id IS NULL;
             """
         )
         await conn.execute(
             """
-            UPDATE users
-               SET telegram_user_id = (
-                     SELECT ui.platform_user_id
-                       FROM user_identities ui
-                      WHERE ui.user_id = users.id
-                        AND ui.platform = 'telegram'
-                      LIMIT 1
-                   )
-             WHERE telegram_user_id IS NULL;
+            UPDATE users SET telegram_user_id = (
+                SELECT ui.platform_user_id FROM user_identities ui
+                WHERE ui.user_id = users.id AND ui.platform = 'telegram' LIMIT 1
+            ) WHERE telegram_user_id IS NULL;
             """
         )
         await conn.execute(
             """
-            UPDATE users
-               SET display_name = (
-                     SELECT ui.display_name
-                       FROM user_identities ui
-                      WHERE ui.user_id = users.id
-                        AND ui.platform IN ('discord', 'telegram')
-                        AND ui.display_name IS NOT NULL
-                      ORDER BY CASE ui.platform WHEN 'discord' THEN 0 ELSE 1 END
-                      LIMIT 1
-                   )
-             WHERE display_name IS NULL;
+            UPDATE users SET display_name = (
+                SELECT ui.display_name FROM user_identities ui
+                WHERE ui.user_id = users.id
+                  AND ui.platform IN ('discord', 'telegram')
+                  AND ui.display_name IS NOT NULL
+                ORDER BY CASE ui.platform WHEN 'discord' THEN 0 ELSE 1 END
+                LIMIT 1
+            ) WHERE display_name IS NULL;
             """
         )
-
     try:
         await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_discord_user_id ON users(discord_user_id);")
     except Exception:
@@ -322,49 +275,97 @@ async def _migration_v5(conn) -> None:
 
 async def _migration_v6(conn) -> None:
     """
-    Guild-scoped economy.
-
-    Adds guild_id to bean_accounts and bean_transactions so Dutch and English
-    members have separate balances and transaction histories.
-
-    - guild_id TEXT NULL — NULL means English server (legacy rows preserved as-is)
-    - bean_accounts primary key changes from (user_id) to (user_id, guild_id)
-      via a new guild-aware table.
-    - Dutch shop inventory is also scoped by guild.
+    Adds guild_id column to bean tables (default 'en' for all existing rows).
     """
-    # --- bean_accounts: add guild_id column ---
     if await _table_exists(conn, "bean_accounts"):
         if not await _column_exists(conn, "bean_accounts", "guild_id"):
             await conn.execute("ALTER TABLE bean_accounts ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'en';")
-
-    # --- bean_transactions: add guild_id column ---
     if await _table_exists(conn, "bean_transactions"):
         if not await _column_exists(conn, "bean_transactions", "guild_id"):
             await conn.execute("ALTER TABLE bean_transactions ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'en';")
-
-    # --- shop_inventory: add guild_id column ---
     if await _table_exists(conn, "shop_inventory"):
         if not await _column_exists(conn, "shop_inventory", "guild_id"):
             await conn.execute("ALTER TABLE shop_inventory ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'en';")
-
-    # --- shop_item_uses: add guild_id column ---
     if await _table_exists(conn, "shop_item_uses"):
         if not await _column_exists(conn, "shop_item_uses", "guild_id"):
             await conn.execute("ALTER TABLE shop_item_uses ADD COLUMN guild_id TEXT NOT NULL DEFAULT 'en';")
+    try:
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_bean_accounts_guild ON bean_accounts(user_id, guild_id);")
+    except Exception:
+        pass
+    try:
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_bean_transactions_guild ON bean_transactions(user_id, guild_id);")
+    except Exception:
+        pass
 
-    # Indexes for guild-scoped queries
+
+async def _migration_v7(conn) -> None:
+    """
+    Fixes bean_accounts primary key to be (user_id, guild_id) composite.
+
+    The original table had user_id as sole PRIMARY KEY, which prevented
+    a user from having separate English and Dutch balances. This migration:
+      1. Renames the old table
+      2. Creates a new one with composite PK (user_id, guild_id)
+      3. Copies all existing rows (preserving English balances)
+      4. Drops the old table
+    """
+    if not await _table_exists(conn, "bean_accounts"):
+        # Fresh DB — create with correct schema from the start
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bean_accounts (
+                user_id INTEGER NOT NULL,
+                guild_id TEXT NOT NULL DEFAULT 'en',
+                balance INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (user_id, guild_id),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            """
+        )
+        return
+
+    # Check if the PK is already composite by checking if guild_id is part of PK
+    # We detect this by trying to insert a duplicate (user_id, guild_id='nl') — instead
+    # just always recreate safely via rename+copy.
+    await conn.execute("ALTER TABLE bean_accounts RENAME TO bean_accounts_old;")
+
+    await conn.execute(
+        """
+        CREATE TABLE bean_accounts (
+            user_id INTEGER NOT NULL,
+            guild_id TEXT NOT NULL DEFAULT 'en',
+            balance INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (user_id, guild_id),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+        """
+    )
+
+    # Copy existing rows — guild_id column exists from v6 so this is safe
+    await conn.execute(
+        """
+        INSERT INTO bean_accounts (user_id, guild_id, balance, created_at, updated_at)
+        SELECT user_id, guild_id, balance, created_at, updated_at
+        FROM bean_accounts_old;
+        """
+    )
+
+    await conn.execute("DROP TABLE bean_accounts_old;")
+
+    # Recreate index on new table
     try:
         await conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_bean_accounts_guild ON bean_accounts(user_id, guild_id);"
         )
     except Exception:
         pass
-    try:
-        await conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_bean_transactions_guild ON bean_transactions(user_id, guild_id);"
-        )
-    except Exception:
-        pass
+
+    logger.info("Migration v7: bean_accounts rebuilt with composite PK (user_id, guild_id)")
 
 
 MIGRATIONS = [
@@ -374,6 +375,7 @@ MIGRATIONS = [
     (4, _migration_v4),
     (5, _migration_v5),
     (6, _migration_v6),
+    (7, _migration_v7),
 ]
 
 
@@ -400,7 +402,6 @@ async def run_migrations(db: Database) -> None:
         for version, fn in MIGRATIONS:
             if version <= current_version:
                 continue
-
             logger.info("Applying migration v%s", version)
             await fn(conn)
             await conn.execute(
