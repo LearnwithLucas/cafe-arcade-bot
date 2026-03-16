@@ -60,7 +60,7 @@ DUTCH_WORD_CHAIN_CHANNEL_ID = 1482763114842816765
 
 # ---- Assets ----
 WORDS_TXT_PATH = Path("src/assets/words_en.txt")
-WORDS_NL_TXT_PATH = Path("src/assets/words_nl.txt")
+
 
 async def main() -> None:
     settings = Settings.load()
@@ -76,6 +76,9 @@ async def main() -> None:
 
     # --- Load Dutch word list ---
     wordlist_nl = WordList.load_from_txt(WORDS_NL_TXT_PATH)
+
+    # --- Load Dutch complete word list (for Woordketting) ---
+    wordlist_nl_compleet = WordList.load_from_txt(WORDS_NL_COMPLEET_PATH)
 
     # --- Repositories ---
     users_repo = UsersRepository(db)
@@ -249,7 +252,7 @@ async def main() -> None:
         economy=economy_service,
         rewards=rewards,
         cooldowns=cooldowns,
-        wordlist=wordlist_nl,
+        wordlist=wordlist_nl_compleet,
         allowed_channel_ids={DUTCH_WORD_CHAIN_CHANNEL_ID},
         leaderboard_publisher=dutch_leaderboard_publisher,
     )

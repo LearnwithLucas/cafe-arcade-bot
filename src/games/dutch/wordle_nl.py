@@ -442,7 +442,16 @@ class DutchWordleGame:
             return False
 
         if not self._wordlist.is_word(guess):
-            return False
+            # Word is right shape but not in Dutch word list — give feedback
+            try:
+                await message.channel.send(
+                    f"❌ **{guess}** staat niet in de woordenlijst.",
+                    delete_after=5,
+                )
+                await message.delete()
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            return True
 
         async with self._lock_for_channel(channel_id):
             sess = await self._get_or_create_today_session(channel_id=channel_id)
