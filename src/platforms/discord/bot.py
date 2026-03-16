@@ -8,6 +8,7 @@ import discord
 from src.config.settings import Settings
 from src.platforms.discord.commands import setup as setup_commands
 from src.platforms.discord.events import setup as setup_events
+from src.services.hub_service import HubPublisher, StartHereView, BeginHierView
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,11 @@ class ArcadeDiscordBot(discord.Client):
         await setup_commands(self)
         await setup_events(self)
 
-        # Attach English leaderboard publisher (set_bot handles add_view internally)
+        # Register persistent views so buttons survive restarts
+        self.add_view(StartHereView())
+        self.add_view(BeginHierView())
+
+        # Attach English leaderboard publisher
         publisher = self.services.get("leaderboard_publisher")
         if publisher:
             try:
@@ -34,7 +39,7 @@ class ArcadeDiscordBot(discord.Client):
             except Exception:
                 logger.exception("Failed to attach bot to English leaderboard publisher")
 
-        # Attach Dutch leaderboard publisher (set_bot handles add_view internally)
+        # Attach Dutch leaderboard publisher
         dutch_publisher = self.services.get("dutch_leaderboard_publisher")
         if dutch_publisher:
             try:
@@ -77,6 +82,17 @@ class ArcadeDiscordBot(discord.Client):
 
     async def on_ready(self) -> None:
         logger.info("Discord bot ready: %s (id=%s)", self.user, self.user.id if self.user else "?")
+
+        # Post/update hub messages in both servers
+        hub = HubPublisher(bot=self)
+        try:
+            await hub.publish_english()
+        except Exception:
+            logger.exception("Hub: failed to publish English hub")
+        try:
+            await hub.publish_dutch()
+        except Exception:
+            logger.exception("Hub: failed to publish Dutch hub")
 
 
 def build_discord_bot(*, settings: Settings, services: dict[str, Any]) -> ArcadeDiscordBot:
