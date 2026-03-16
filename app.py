@@ -60,7 +60,8 @@ DUTCH_WORD_CHAIN_CHANNEL_ID = 1482763114842816765
 
 # ---- Assets ----
 WORDS_TXT_PATH = Path("src/assets/words_en.txt")
-
+WORDS_NL_TXT_PATH = Path("src/assets/words_nl.txt")
+WORDS_NL_COMPLEET_PATH = Path("src/assets/words_nl_compleet.txt")
 
 async def main() -> None:
     settings = Settings.load()
