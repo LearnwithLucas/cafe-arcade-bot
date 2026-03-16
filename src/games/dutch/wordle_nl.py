@@ -198,6 +198,18 @@ class DutchWordleGame:
         if sess:
             try:
                 state = json.loads(sess.state_json)
+                # If session is from a previous day, start a fresh one
+                if state.get("date") != _utc_date_str():
+                    await self.start_in_channel(channel_id=channel_id)
+                    sess = await self._games_repo.get_active_session(
+                        platform="discord",
+                        location_id=str(channel_id),
+                        thread_id=None,
+                        game_key=self.key,
+                    )
+                    if not sess:
+                        return None
+                    return sess.id, json.loads(sess.state_json)
                 return sess.id, state
             except Exception:
                 pass

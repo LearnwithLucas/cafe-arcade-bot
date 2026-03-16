@@ -15,7 +15,6 @@ from src.services.cooldowns import Cooldowns
 from src.services.rewards_service import RewardKey, RewardsService
 from src.platforms.discord.admin_commands import AdminCommands
 from src.db.repo.economy_repo import GUILD_EN, GUILD_NL
-from src.services.hub_service import HubPublisher
 
 
 logger = logging.getLogger(__name__)
@@ -270,26 +269,6 @@ class CafeCommands(app_commands.Group):
     # Shared logic
     # -------------
 
-
-    @app_commands.command(name="hub", description="Refresh the games hub in #start-here")
-    async def hub(self, interaction: discord.Interaction) -> None:
-        if _is_dutch_guild(self.bot, interaction):
-            await interaction.response.defer(ephemeral=True)
-            try:
-                hub = HubPublisher(bot=self.bot)
-                await hub.publish_dutch()
-                await interaction.followup.send("✅ Begin-hier bericht vernieuwd.", ephemeral=True)
-            except Exception:
-                await interaction.followup.send("❌ Vernieuwen mislukt.", ephemeral=True)
-        else:
-            await interaction.response.defer(ephemeral=True)
-            try:
-                hub = HubPublisher(bot=self.bot)
-                await hub.publish_english()
-                await interaction.followup.send("✅ Hub refreshed.", ephemeral=True)
-            except Exception:
-                await interaction.followup.send("❌ Failed to refresh hub.", ephemeral=True)
-
     async def _do_daily(self, interaction: discord.Interaction, guild_id: str) -> None:
         rewards = self._get_rewards()
         economy = self.services.get("economy")
@@ -403,7 +382,7 @@ class GamesCommands(app_commands.Group):
         if not wordle:
             await interaction.response.send_message("Wordle is not available.", ephemeral=True)
             return
-        await wordle.start_in_channel(channel=interaction.channel, channel_id=interaction.channel_id)
+        await wordle.start_in_channel(channel_id=interaction.channel_id)
         embed = discord.Embed(
             title="🧩 Wordle — Daily",
             description=(
