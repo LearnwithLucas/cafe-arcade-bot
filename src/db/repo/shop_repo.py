@@ -101,14 +101,14 @@ class ShopRepository:
     # Inventory (shop_inventory)
     # -----------------------
 
-    async def get_quantity(self, *, user_id: int, item_key: str) -> int:
+    async def get_quantity(self, *, user_id: int, item_key: str, guild_id: str = "en") -> int:
         row = await self._db.fetchone(
             """
             SELECT quantity
             FROM shop_inventory
-            WHERE user_id = ? AND item_key = ?
+            WHERE user_id = ? AND item_key = ? AND guild_id = ?
             """,
-            (int(user_id), str(item_key)),
+            (int(user_id), str(item_key), str(guild_id)),
         )
         return int(row["quantity"]) if row else 0
 
@@ -123,37 +123,36 @@ class ShopRepository:
             (int(user_id), str(item_key), int(quantity)),
         )
 
-    async def add_quantity(self, *, user_id: int, item_key: str, delta: int) -> int:
+    async def add_quantity(self, *, user_id: int, item_key: str, delta: int, guild_id: str = "en") -> int:
         """
         Adds delta (can be negative). Returns new quantity.
         NOTE: This does not clamp at 0. Callers should validate before subtracting.
         """
         async with self._db.transaction() as conn:
-            # Ensure row exists
             await conn.execute(
                 """
-                INSERT OR IGNORE INTO shop_inventory (user_id, item_key, quantity, updated_at)
-                VALUES (?, ?, 0, datetime('now'))
+                INSERT OR IGNORE INTO shop_inventory (user_id, item_key, guild_id, quantity, updated_at)
+                VALUES (?, ?, ?, 0, datetime('now'))
                 """,
-                (int(user_id), str(item_key)),
+                (int(user_id), str(item_key), str(guild_id)),
             )
 
             await conn.execute(
                 """
                 UPDATE shop_inventory
                 SET quantity = quantity + ?, updated_at = datetime('now')
-                WHERE user_id = ? AND item_key = ?
+                WHERE user_id = ? AND item_key = ? AND guild_id = ?
                 """,
-                (int(delta), int(user_id), str(item_key)),
+                (int(delta), int(user_id), str(item_key), str(guild_id)),
             )
 
             cur = await conn.execute(
                 """
                 SELECT quantity
                 FROM shop_inventory
-                WHERE user_id = ? AND item_key = ?
+                WHERE user_id = ? AND item_key = ? AND guild_id = ?
                 """,
-                (int(user_id), str(item_key)),
+                (int(user_id), str(item_key), str(guild_id)),
             )
             row = await cur.fetchone()
             return int(row["quantity"]) if row else 0
@@ -170,9 +169,10 @@ class ShopRepository:
         )
         return [{"item_key": str(r["item_key"]), "quantity": int(r["quantity"])} for r in rows]
 
-    async def get_inventory_with_catalog(self, *, user_id: int) -> list[dict[str, Any]]:
+    async def get_inventory_with_catalog(self, *, user_id: int, guild_id: str = "en") -> list[dict[str, Any]]:
         """
         Convenience for UI: returns joined rows even if quantity is 0.
+        Scoped to guild_id so EN and NL inventories are separate.
         """
         rows = await self._db.fetchall(
             """
@@ -186,10 +186,10 @@ class ShopRepository:
                 COALESCE(inv.quantity, 0) AS quantity
             FROM shop_items si
             LEFT JOIN shop_inventory inv
-              ON inv.user_id = ? AND inv.item_key = si.item_key
+              ON inv.user_id = ? AND inv.item_key = si.item_key AND inv.guild_id = ?
             ORDER BY si.price ASC, si.item_key ASC
             """,
-            (int(user_id),),
+            (int(user_id), str(guild_id)),
         )
         return [
             {
@@ -208,46 +208,46 @@ class ShopRepository:
     # Daily uses (shop_item_uses) — UTC day string
     # -----------------------
 
-    async def get_used_today(self, *, user_id: int, item_key: str, day_utc: str) -> int:
+    async def get_used_today(self, *, user_id: int, item_key: str, day_utc: str, guild_id: str = "en") -> int:
         row = await self._db.fetchone(
             """
             SELECT used_count
             FROM shop_item_uses
-            WHERE user_id = ? AND item_key = ? AND day_utc = ?
+            WHERE user_id = ? AND item_key = ? AND day_utc = ? AND guild_id = ?
             """,
-            (int(user_id), str(item_key), str(day_utc)),
+            (int(user_id), str(item_key), str(day_utc), str(guild_id)),
         )
         return int(row["used_count"]) if row else 0
 
-    async def increment_used_today(self, *, user_id: int, item_key: str, day_utc: str, delta: int) -> int:
+    async def increment_used_today(self, *, user_id: int, item_key: str, day_utc: str, delta: int, guild_id: str = "en") -> int:
         """
-        Increments used_count for (user,item,day). Returns new used_count.
+        Increments used_count for (user, item, day, guild). Returns new used_count.
         """
         async with self._db.transaction() as conn:
             await conn.execute(
                 """
-                INSERT OR IGNORE INTO shop_item_uses (user_id, item_key, day_utc, used_count, updated_at)
-                VALUES (?, ?, ?, 0, datetime('now'))
+                INSERT OR IGNORE INTO shop_item_uses (user_id, item_key, day_utc, guild_id, used_count, updated_at)
+                VALUES (?, ?, ?, ?, 0, datetime('now'))
                 """,
-                (int(user_id), str(item_key), str(day_utc)),
+                (int(user_id), str(item_key), str(day_utc), str(guild_id)),
             )
 
             await conn.execute(
                 """
                 UPDATE shop_item_uses
                 SET used_count = used_count + ?, updated_at = datetime('now')
-                WHERE user_id = ? AND item_key = ? AND day_utc = ?
+                WHERE user_id = ? AND item_key = ? AND day_utc = ? AND guild_id = ?
                 """,
-                (int(delta), int(user_id), str(item_key), str(day_utc)),
+                (int(delta), int(user_id), str(item_key), str(day_utc), str(guild_id)),
             )
 
             cur = await conn.execute(
                 """
                 SELECT used_count
                 FROM shop_item_uses
-                WHERE user_id = ? AND item_key = ? AND day_utc = ?
+                WHERE user_id = ? AND item_key = ? AND day_utc = ? AND guild_id = ?
                 """,
-                (int(user_id), str(item_key), str(day_utc)),
+                (int(user_id), str(item_key), str(day_utc), str(guild_id)),
             )
             row = await cur.fetchone()
             return int(row["used_count"]) if row else 0

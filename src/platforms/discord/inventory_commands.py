@@ -8,8 +8,15 @@ import discord
 from discord import app_commands
 
 from src.assets.asset_links import AssetLinks
+from src.db.repo.economy_repo import GUILD_EN, GUILD_NL
 
 logger = logging.getLogger(__name__)
+
+
+def _guild_id_for(bot_dutch_guild_id: int | None, interaction_guild_id: int | None) -> str:
+    if bot_dutch_guild_id and interaction_guild_id and interaction_guild_id == bot_dutch_guild_id:
+        return GUILD_NL
+    return GUILD_EN
 
 
 @dataclass
@@ -36,9 +43,10 @@ class InventoryCommands(app_commands.Command):
     - Inventory message stays open and refreshes after use
     """
 
-    def __init__(self, *, services: dict[str, Any], inventory_channel_id: int | None = None) -> None:
+    def __init__(self, *, services: dict[str, Any], inventory_channel_id: int | None = None, dutch_guild_id: int | None = None) -> None:
         self._services = services
         self._inventory_channel_id = int(inventory_channel_id) if inventory_channel_id else None
+        self._dutch_guild_id = dutch_guild_id
 
         async def _callback(interaction: discord.Interaction) -> None:
             await self._open_inventory(interaction)
@@ -59,15 +67,18 @@ class InventoryCommands(app_commands.Command):
         *,
         discord_user_id: int,
         display_name: str | None,
+        guild_id: str = GUILD_EN,
     ) -> tuple[discord.Embed, list[dict[str, Any]]]:
-        shop = self._services.get("shop")
+        # Use Dutch shop service for NL guild, English for EN
+        service_key = "dutch_shop" if guild_id == GUILD_NL else "shop"
+        shop = self._services.get(service_key) or self._services.get("shop")
         economy = self._services.get("economy")
 
         if not shop or not economy:
             return _inv_embed(title="🎒 Inventory", description="Inventory is not available right now."), []
 
-        balance = await economy.get_balance_discord(user_id=discord_user_id, display_name=display_name)
-        rows = await shop.inventory_discord(discord_user_id=discord_user_id, display_name=display_name)
+        balance = await economy.get_balance_discord(user_id=discord_user_id, display_name=display_name, guild_id=guild_id)
+        rows = await shop.inventory_discord(discord_user_id=discord_user_id, display_name=display_name, guild_id=guild_id)
 
         # Build pretty list (show all items, including qty=0, but dropdown will filter usable+owned)
         lines: list[str] = []
@@ -104,20 +115,24 @@ class InventoryCommands(app_commands.Command):
             )
             return
 
-        shop = self._services.get("shop")
+        service_key = "dutch_shop" if self._guild_id == GUILD_NL else "shop"
+        shop = self._services.get(service_key) or self._services.get("shop")
         if not shop:
             await interaction.response.send_message("Shop service not available.", ephemeral=True)
             return
 
+        guild_id = _guild_id_for(self._dutch_guild_id, interaction.guild_id)
         embed, rows = await self._render_inventory(
             discord_user_id=interaction.user.id,
             display_name=getattr(interaction.user, "display_name", None),
+            guild_id=guild_id,
         )
 
         view = _InventoryView(
             services=self._services,
             owner_id=interaction.user.id,
             initial_rows=rows,
+            guild_id=guild_id,
         )
 
         await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
@@ -187,11 +202,13 @@ class _InventoryView(discord.ui.View):
         services: dict[str, Any],
         owner_id: int,
         initial_rows: list[dict[str, Any]],
+        guild_id: str = GUILD_EN,
     ) -> None:
         super().__init__(timeout=60 * 15)
 
         self._services = services
         self._owner_id = int(owner_id)
+        self._guild_id = guild_id
         self._rows: list[dict[str, Any]] = list(initial_rows or [])
         self._selected = _Selected(item_key=None)
 
@@ -199,7 +216,8 @@ class _InventoryView(discord.ui.View):
         self.add_item(self._select)
 
     async def _refresh_panel(self, *, interaction: discord.Interaction) -> None:
-        shop = self._services.get("shop")
+        service_key = "dutch_shop" if self._guild_id == GUILD_NL else "shop"
+        shop = self._services.get(service_key) or self._services.get("shop")
         economy = self._services.get("economy")
         if not shop or not economy:
             return
@@ -207,10 +225,12 @@ class _InventoryView(discord.ui.View):
         balance = await economy.get_balance_discord(
             user_id=interaction.user.id,
             display_name=getattr(interaction.user, "display_name", None),
+            guild_id=self._guild_id,
         )
         rows = await shop.inventory_discord(
             discord_user_id=interaction.user.id,
             display_name=getattr(interaction.user, "display_name", None),
+            guild_id=self._guild_id,
         )
         self._rows = list(rows or [])
 
@@ -253,7 +273,8 @@ class _InventoryView(discord.ui.View):
             await interaction.response.send_message("This inventory panel belongs to someone else.", ephemeral=True)
             return
 
-        shop = self._services.get("shop")
+        service_key = "dutch_shop" if self._guild_id == GUILD_NL else "shop"
+        shop = self._services.get(service_key) or self._services.get("shop")
         if not shop:
             await interaction.response.send_message("Shop service not available.", ephemeral=True)
             return
@@ -268,6 +289,7 @@ class _InventoryView(discord.ui.View):
             display_name=getattr(interaction.user, "display_name", None),
             item_key=str(item_key),
             quantity=1,
+            guild_id=self._guild_id,
         )
 
         # Confirmation

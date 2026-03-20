@@ -382,7 +382,7 @@ class GamesCommands(app_commands.Group):
         if not wordle:
             await interaction.response.send_message("Wordle is not available.", ephemeral=True)
             return
-        await wordle.start_in_channel(channel_id=interaction.channel_id)
+        await wordle.start_in_channel(channel=interaction.channel, channel_id=interaction.channel_id)
         embed = discord.Embed(
             title="🧩 Wordle — Daily",
             description=(
@@ -629,7 +629,10 @@ async def setup(bot: discord.Client) -> None:
 
     if "inventory" not in existing:
         if _has_service(services, "shop"):
-            bot.tree.add_command(InventoryCommands(services=services))
+            bot.tree.add_command(InventoryCommands(
+                services=services,
+                dutch_guild_id=int(getattr(getattr(bot, "settings", None), "dutch_guild_id", None) or 0) or None,
+            ))
         else:
             logger.warning("shop service not found; /inventory not registered")
 

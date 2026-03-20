@@ -84,7 +84,7 @@ class ShopService:
     # Read APIs
     # -----------------------
 
-    async def inventory_discord(self, *, discord_user_id: int, display_name: str | None = None) -> list[dict[str, Any]]:
+    async def inventory_discord(self, *, discord_user_id: int, display_name: str | None = None, guild_id: str = GUILD_EN) -> list[dict[str, Any]]:
         await self._ensure_catalog_seeded()
 
         user = await self._users_repo.get_or_create_discord_user(
@@ -92,7 +92,7 @@ class ShopService:
             display_name=display_name,
         )
 
-        rows = await self._shop_repo.get_inventory_with_catalog(user_id=user.id)
+        rows = await self._shop_repo.get_inventory_with_catalog(user_id=user.id, guild_id=guild_id)
 
         out: list[dict[str, Any]] = []
         for r in rows:
@@ -147,7 +147,7 @@ class ShopService:
             display_name=display_name,
         )
 
-        current_qty = await self._shop_repo.get_quantity(user_id=user.id, item_key=key)
+        current_qty = await self._shop_repo.get_quantity(user_id=user.id, item_key=key, guild_id=guild_id)
         if current_qty >= max_stack:
             return ShopResult(False, f"You already have the max **{max_stack}** for {name}.")
 
@@ -174,7 +174,7 @@ class ShopService:
             guild_id=guild_id,
         )
 
-        new_qty = await self._shop_repo.add_quantity(user_id=user.id, item_key=key, delta=qty_to_add)
+        new_qty = await self._shop_repo.add_quantity(user_id=user.id, item_key=key, delta=qty_to_add, guild_id=guild_id)
 
         return ShopResult(
             True,
@@ -194,6 +194,7 @@ class ShopService:
         display_name: str | None,
         item_key: str,
         quantity: int,
+        guild_id: str = GUILD_EN,
     ) -> ShopResult:
         db_item, code_item = await self._get_item(item_key)
         if not db_item and not code_item:
@@ -213,14 +214,14 @@ class ShopService:
             display_name=display_name,
         )
 
-        current_qty = await self._shop_repo.get_quantity(user_id=user.id, item_key=key)
+        current_qty = await self._shop_repo.get_quantity(user_id=user.id, item_key=key, guild_id=guild_id)
         if current_qty <= 0:
             return ShopResult(False, f"You don't have any **{name}**.")
 
         qty_to_use = min(qty, current_qty)
 
         day = _utc_day_str()
-        used_today = await self._shop_repo.get_used_today(user_id=user.id, item_key=key, day_utc=day)
+        used_today = await self._shop_repo.get_used_today(user_id=user.id, item_key=key, day_utc=day, guild_id=guild_id)
         remaining_today = max(0, int(max_uses_per_day) - int(used_today))
         if remaining_today <= 0:
             return ShopResult(False, f"You've hit today's limit for {name} (**{max_uses_per_day}/day**).")
@@ -229,8 +230,8 @@ class ShopService:
         if qty_to_use <= 0:
             return ShopResult(False, f"You can't use any more {name} today.")
 
-        new_qty = await self._shop_repo.add_quantity(user_id=user.id, item_key=key, delta=-qty_to_use)
-        await self._shop_repo.increment_used_today(user_id=user.id, item_key=key, day_utc=day, delta=qty_to_use)
+        new_qty = await self._shop_repo.add_quantity(user_id=user.id, item_key=key, delta=-qty_to_use, guild_id=guild_id)
+        await self._shop_repo.increment_used_today(user_id=user.id, item_key=key, day_utc=day, delta=qty_to_use, guild_id=guild_id)
 
         # Flavor messages — English and Dutch items
         flavor: dict[str, str] = {
