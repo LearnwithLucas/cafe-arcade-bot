@@ -42,6 +42,7 @@ from src.games.dutch.unscramble_nl import DutchUnscrambleGame
 from src.games.dutch.word_chain_nl import DutchWordChainGame
 
 from src.platforms.discord.bot import build_discord_bot
+from src.platforms.telegram.bot import build_telegram_bot
 
 
 # ---- Channel IDs (Discord — English server) ----
@@ -338,10 +339,28 @@ async def main() -> None:
     # --- Discord bot ---
     discord_bot = build_discord_bot(settings=settings, services=services)
 
+    # --- Telegram bot (optional) ---
+    telegram_token = settings.telegram_token
+    telegram_bot = build_telegram_bot(services=services, token=telegram_token) if telegram_token else None
+
+    async def run_discord() -> None:
+        try:
+            await discord_bot.start(settings.discord_token)
+        finally:
+            await db.close()
+
+    async def run_telegram() -> None:
+        if telegram_bot:
+            await telegram_bot.run()
+
     try:
-        await discord_bot.start(settings.discord_token)
+        if telegram_bot:
+            await asyncio.gather(run_discord(), run_telegram())
+        else:
+            await run_discord()
     finally:
-        await db.close()
+        if telegram_bot:
+            await telegram_bot.stop()
 
 
 if __name__ == "__main__":
