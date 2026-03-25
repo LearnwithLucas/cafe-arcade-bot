@@ -10,8 +10,6 @@ from telegram.ext import ContextTypes
 
 from src.db.repo.games_repo import GamesRepository
 from src.db.repo.users_repo import UsersRepository
-from src.services.economy_service import EconomyService
-from src.services.rewards_service import RewardsService, RewardKey
 from src.services.wordlist import WordList
 
 log = logging.getLogger("telegram.unscramble")
@@ -39,14 +37,10 @@ class TelegramUnscrambleGame:
         *,
         games_repo: GamesRepository,
         users_repo: UsersRepository,
-        economy: EconomyService,
-        rewards: RewardsService,
         wordlist: WordList,
     ) -> None:
         self._games_repo = games_repo
         self._users_repo = users_repo
-        self._economy = economy
-        self._rewards = rewards
         self._wordlist = wordlist
 
     def _pick_word(self) -> str:
@@ -161,16 +155,9 @@ class TelegramUnscrambleGame:
                 session_id=sess_id, platform=PLATFORM, location_id=str(chat_id),
                 thread_id=str(user_id), game_key=self.key, state=state
             )
-            beans = self._rewards.amount(RewardKey.UNSCRAMBLE_SOLVE) if guesses_used == 1 else max(5, 20 - (guesses_used - 1) * 5)
-            await self._economy.award_beans_discord(
-                user_id=user_id, amount=beans, reason="Unscramble TG",
-                game_key=self.key, display_name=username, guild_id="en",
-                metadata=json.dumps({"solved": True, "guesses": guesses_used})
-            )
             await update.message.reply_text(
                 f"Correct! The word was *{answer.upper()}*.\n"
-                f"Solved in {guesses_used} guess{'es' if guesses_used != 1 else ''}. "
-                f"You earned {beans} beans.\n\nUse /unscramble to play again.",
+                f"Solved in {guesses_used} guess{'es' if guesses_used != 1 else ''}.\n\nUse /unscramble to play again.",
                 parse_mode="Markdown"
             )
             return True

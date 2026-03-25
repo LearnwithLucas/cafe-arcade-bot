@@ -12,8 +12,6 @@ from telegram.ext import ContextTypes
 
 from src.db.repo.games_repo import GamesRepository
 from src.db.repo.users_repo import UsersRepository
-from src.services.economy_service import EconomyService
-from src.services.rewards_service import RewardsService, RewardKey
 from src.services.wordlist import WordList
 
 log = logging.getLogger("telegram.wordle")
@@ -62,14 +60,10 @@ class TelegramWordleGame:
         *,
         games_repo: GamesRepository,
         users_repo: UsersRepository,
-        economy: EconomyService,
-        rewards: RewardsService,
         wordlist: WordList,
     ) -> None:
         self._games_repo = games_repo
         self._users_repo = users_repo
-        self._economy = economy
-        self._rewards = rewards
         self._wordlist = wordlist
 
     def _pick_word(self) -> str:
@@ -215,27 +209,15 @@ class TelegramWordleGame:
         attempts = len(progress["guesses"])
 
         if solved:
-            beans = self._rewards.amount(RewardKey.WORDLE_SOLVE)
-            user = await self._users_repo.get_or_create_discord_user(
-                discord_user_id=user_id, display_name=username
-            )
-            await self._economy.award_beans_discord(
-                user_id=user_id, amount=beans, reason="Wordle TG",
-                game_key=self.key, display_name=username, guild_id="en",
-                metadata=json.dumps({"date": date_str, "solved": True, "attempts": attempts})
-            )
             await update.message.reply_text(
                 f"{board}\n\n"
-                f"Solved in {attempts} guess{'es' if attempts != 1 else ''}! "
-                f"You earned {beans} beans."
+                f"Solved in {attempts} guess{'es' if attempts != 1 else ''}!"
             )
         elif out_of_guesses:
-            per_green = self._rewards.amount(RewardKey.WORDLE_FAIL_PER_GREEN)
-            beans = per_green * progress["best_green"]
             await update.message.reply_text(
                 f"{board}\n\n"
                 f"Out of guesses. The word was {answer.upper()}.\n"
-                f"Best: {progress['best_green']} green letters. You earned {beans} beans."
+                f"Best: {progress['best_green']} green letters."
             )
         else:
             left = MAX_GUESSES - attempts

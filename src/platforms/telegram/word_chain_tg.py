@@ -10,16 +10,11 @@ from telegram.ext import ContextTypes
 
 from src.db.repo.games_repo import GamesRepository
 from src.db.repo.users_repo import UsersRepository
-from src.services.economy_service import EconomyService
-from src.services.rewards_service import RewardsService, RewardKey
 from src.services.wordlist import WordList
 
 log = logging.getLogger("telegram.word_chain")
 
 PLATFORM = "telegram"
-BEANS_PER_WORD = 2
-
-
 class TelegramWordChainGame:
     key = "word_chain_tg"
 
@@ -28,14 +23,10 @@ class TelegramWordChainGame:
         *,
         games_repo: GamesRepository,
         users_repo: UsersRepository,
-        economy: EconomyService,
-        rewards: RewardsService,
         wordlist: WordList,
     ) -> None:
         self._games_repo = games_repo
         self._users_repo = users_repo
-        self._economy = economy
-        self._rewards = rewards
         self._wordlist = wordlist
 
     def _starter_word(self) -> str:
@@ -76,7 +67,6 @@ class TelegramWordChainGame:
             f"Starting word: *{starter.upper()}*\n\n"
             f"Type a word that starts with *{starter[-1].upper()}*.\n"
             f"Each word must start with the last letter of the previous word.\n"
-            f"Earn {BEANS_PER_WORD} beans per valid word.\n\n"
             f"Use /stopchain to end the game.",
             parse_mode="Markdown"
         )
@@ -101,8 +91,6 @@ class TelegramWordChainGame:
     async def handle_word(self, update: Update, context: ContextTypes.DEFAULT_TYPE, word: str) -> bool:
         chat_id = update.effective_chat.id
         user_id = update.effective_user.id
-        username = update.effective_user.first_name or str(user_id)
-
         result = await self._get_session(chat_id)
         if not result:
             return False
@@ -132,15 +120,9 @@ class TelegramWordChainGame:
             thread_id=None, game_key=self.key, state=state
         )
 
-        await self._economy.award_beans_discord(
-            user_id=user_id, amount=BEANS_PER_WORD, reason="Word Chain TG",
-            game_key=self.key, display_name=username, guild_id="en",
-            metadata=json.dumps({"word": word, "chain_length": state["chain_length"]})
-        )
-
         next_letter = word[-1].upper()
         await update.message.reply_text(
-            f"*{word.upper()}* +{BEANS_PER_WORD} beans\n"
+            f"*{word.upper()}* ✓\n"
             f"Chain: {state['chain_length']} words\n"
             f"Next word must start with *{next_letter}*",
             parse_mode="Markdown"

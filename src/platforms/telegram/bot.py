@@ -15,13 +15,13 @@ from telegram.ext import (
     filters,
 )
 
-from src.platforms.telegram.wordle import TelegramWordleGame
-from src.platforms.telegram.unscramble import TelegramUnscrambleGame
-from src.platforms.telegram.word_chain import TelegramWordChainGame
+from src.platforms.telegram.wordle_tg import TelegramWordleGame
+from src.platforms.telegram.unscramble_tg import TelegramUnscrambleGame
+from src.platforms.telegram.word_chain_tg import TelegramWordChainGame
 
 log = logging.getLogger("telegram.bot")
 
-AFK_TIMEOUT_SECONDS = 3 * 60  # 3 minutes
+AFK_TIMEOUT_SECONDS = 3 * 60
 
 
 def _allowed_chat_ids() -> set[int]:
@@ -30,17 +30,14 @@ def _allowed_chat_ids() -> set[int]:
         return set()
     result = set()
     for part in raw.split(","):
-        part = part.strip()
-        if part:
-            try:
-                result.add(int(part))
-            except ValueError:
-                pass
+        try:
+            result.add(int(part.strip()))
+        except ValueError:
+            pass
     return result
 
 
 def _admin_user_ids() -> set[int]:
-    """Lucas's Telegram user ID — set TG_ADMIN_USER_IDS env var."""
     raw = os.getenv("TG_ADMIN_USER_IDS", "").strip()
     if not raw:
         return set()
@@ -58,27 +55,20 @@ def _discovery_mode() -> bool:
 
 
 # ---- Active game tracking ----
-# Tracks which user is currently playing which game in which chat.
-# Key: (chat_id, game_key) -> {user_id, last_active}
-# Only one player per game per chat at a time.
+# (chat_id, game_key) -> {user_id, last_active}
 _active_games: dict[tuple[int, str], dict] = {}
 
 
 def _claim_game(chat_id: int, user_id: int, game_key: str) -> bool:
-    """Returns True if user can play. False if another user is already playing."""
     key = (chat_id, game_key)
     existing = _active_games.get(key)
     now = time.time()
-
     if existing:
-        # Same user — update last_active
         if existing["user_id"] == user_id:
             existing["last_active"] = now
             return True
-        # Different user — check AFK
         if now - existing["last_active"] < AFK_TIMEOUT_SECONDS:
-            return False  # someone else is active
-        # AFK expired — allow takeover
+            return False
     _active_games[key] = {"user_id": user_id, "last_active": now}
     return True
 
@@ -111,8 +101,7 @@ def _afk_seconds_left(chat_id: int, game_key: str) -> int:
     existing = _active_games.get(key)
     if not existing:
         return 0
-    remaining = AFK_TIMEOUT_SECONDS - (time.time() - existing["last_active"])
-    return max(0, int(remaining))
+    return max(0, int(AFK_TIMEOUT_SECONDS - (time.time() - existing["last_active"])))
 
 
 class TelegramBot:
@@ -151,7 +140,7 @@ class TelegramBot:
 
         if _discovery_mode() or is_admin:
             await update.message.reply_text(
-                f"Chat ID: `{chat_id}`\n\n"
+                "Chat ID: `" + str(chat_id) + "`\n\n"
                 "Add this to TELEGRAM\\_ALLOWED\\_CHAT\\_IDS on Render, "
                 "then set TG\\_DISCOVERY\\_MODE=0 and redeploy.",
                 parse_mode="Markdown"
@@ -164,9 +153,9 @@ class TelegramBot:
         await update.message.reply_text(
             "Jerry The Duck reporting for duty.\n\n"
             "Games available:\n"
-            "/wordle — guess the 5-letter word\n"
-            "/unscramble — unscramble a word\n"
-            "/wordchain — build a word chain\n\n"
+            "/wordle \u2014 guess the 5-letter word\n"
+            "/unscramble \u2014 unscramble a word\n"
+            "/wordchain \u2014 build a word chain\n\n"
             "/help for more info."
         )
 
@@ -174,17 +163,21 @@ class TelegramBot:
         if not await self._guard(update):
             return
         await update.message.reply_text(
-            "Jerry The Duck — word games\n\n"
+            "Jerry The Duck \u2014 word games\n\n"
             "Wordle:\n"
-            "/wordle — start today's puzzle\n"
-            "/hint — get a letter hint\n\n"
+            "/wordle \u2014 start today's puzzle\n"
+            "/hint \u2014 get a letter hint\n"
+            "/wordlehelp \u2014 how to play\n\n"
             "Unscramble:\n"
-            "/unscramble — start a new game\n"
-            "/hint — get a hint\n"
-            "/skip — reveal the answer and skip\n\n"
+            "/unscramble \u2014 start a new game\n"
+            "/hint \u2014 get a hint\n"
+            "/skip \u2014 reveal the answer\n"
+            "/unscramblehelp \u2014 how to play\n\n"
             "Word Chain:\n"
-            "/wordchain — start a chain\n"
-            "/stopchain — end the chain\n\n"
+            "/wordchain \u2014 start a chain\n"
+            "/stopchain \u2014 end the chain\n"
+            "/wordchainhelp \u2014 how to play\n\n"
+            "/end \u2014 end your active game\n\n"
             "One player per game at a time. "
             "If a player goes quiet for 3 minutes the slot opens up.\n\n"
             "Type your guess as a plain message during any active game."
@@ -195,14 +188,13 @@ class TelegramBot:
             return
         chat_id = update.effective_chat.id
         user_id = update.effective_user.id
-        username = update.effective_user.first_name or str(user_id)
 
         current = _who_is_playing(chat_id, "wordle_tg")
         if current and current != user_id:
             left = _afk_seconds_left(chat_id, "wordle_tg")
             await update.message.reply_text(
-                f"Someone else is playing Wordle right now. "
-                f"Their slot opens in {left // 60}m {left % 60}s if they go quiet."
+                "Someone else is playing Wordle right now. "
+                "Their slot opens in " + str(left // 60) + "m " + str(left % 60) + "s if they go quiet."
             )
             return
 
@@ -222,8 +214,8 @@ class TelegramBot:
         if current and current != user_id:
             left = _afk_seconds_left(chat_id, "unscramble_tg")
             await update.message.reply_text(
-                f"Someone else is playing Unscramble right now. "
-                f"Their slot opens in {left // 60}m {left % 60}s if they go quiet."
+                "Someone else is playing Unscramble right now. "
+                "Their slot opens in " + str(left // 60) + "m " + str(left % 60) + "s if they go quiet."
             )
             return
 
@@ -243,8 +235,8 @@ class TelegramBot:
         if current and current != user_id:
             left = _afk_seconds_left(chat_id, "word_chain_tg")
             await update.message.reply_text(
-                f"Someone else is playing Word Chain right now. "
-                f"Their slot opens in {left // 60}m {left % 60}s if they go quiet."
+                "Someone else is playing Word Chain right now. "
+                "Their slot opens in " + str(left // 60) + "m " + str(left % 60) + "s if they go quiet."
             )
             return
 
@@ -262,13 +254,26 @@ class TelegramBot:
         _release_game(chat_id, user_id, "word_chain_tg")
         await self._word_chain.cmd_stop(update, context)
 
+    async def cmd_end(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._guard(update):
+            return
+        chat_id = update.effective_chat.id
+        user_id = update.effective_user.id
+        ended = []
+        for game_key in ("wordle_tg", "unscramble_tg", "word_chain_tg"):
+            if _who_is_playing(chat_id, game_key) == user_id:
+                _release_game(chat_id, user_id, game_key)
+                ended.append(game_key.replace("_tg", "").replace("_", " "))
+        if ended:
+            await update.message.reply_text("Ended: " + ", ".join(ended) + ".")
+        else:
+            await update.message.reply_text("You have no active games in this channel.")
+
     async def cmd_hint(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._guard(update):
             return
         chat_id = update.effective_chat.id
         user_id = update.effective_user.id
-
-        # Hint for whichever game this user is playing
         if _who_is_playing(chat_id, "unscramble_tg") == user_id:
             await self._unscramble.cmd_hint(update, context)
         elif _who_is_playing(chat_id, "wordle_tg") == user_id:
@@ -284,6 +289,59 @@ class TelegramBot:
         _release_game(chat_id, user_id, "unscramble_tg")
         await self._unscramble.cmd_skip(update, context)
 
+    async def cmd_wordlehelp(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._guard(update):
+            return
+        await update.message.reply_text(
+            "\U0001f7e9 *Wordle*\n\n"
+            "Guess the hidden 5-letter word. You have 12 tries.\n\n"
+            "After each guess you get coloured squares:\n"
+            "\U0001f7e9 Right letter, right position\n"
+            "\U0001f7e8 Right letter, wrong position\n"
+            "\U0001f7e5 Letter not in the word\n\n"
+            "One puzzle per day. Everyone in the chat plays the same word.\n\n"
+            "*Commands:*\n"
+            "/wordle \u2014 start today's puzzle\n"
+            "/hint \u2014 reveal one letter\n"
+            "/end \u2014 give up and end your game\n\n"
+            "Just type your 5-letter guess as a normal message.",
+            parse_mode="Markdown"
+        )
+
+    async def cmd_unscramblehelp(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._guard(update):
+            return
+        await update.message.reply_text(
+            "\U0001f500 *Unscramble*\n\n"
+            "A word has been scrambled. Put the letters back in the right order.\n\n"
+            "You have 3 guesses. The word is between 5 and 8 letters long.\n\n"
+            "*Commands:*\n"
+            "/unscramble \u2014 start a new game\n"
+            "/hint \u2014 see the first letter and word length\n"
+            "/skip \u2014 give up and reveal the word\n"
+            "/end \u2014 end your current game\n\n"
+            "Type your answer as a normal message.\n\n"
+            "One player at a time. If someone goes quiet for 3 minutes the slot opens up.",
+            parse_mode="Markdown"
+        )
+
+    async def cmd_wordchainhelp(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._guard(update):
+            return
+        await update.message.reply_text(
+            "\u26d3\ufe0f *Word Chain*\n\n"
+            "Build a chain of words. Each word must start with the last letter of the previous word.\n\n"
+            "Example: APPLE \u2192 ELEPHANT \u2192 TIGER \u2192 RABBIT\n\n"
+            "The chain keeps going until someone uses /stopchain.\n\n"
+            "*Commands:*\n"
+            "/wordchain \u2014 start a new chain\n"
+            "/stopchain \u2014 end the current chain\n"
+            "/end \u2014 end your session\n\n"
+            "Type your word as a normal message.\n\n"
+            "Words must be real English words and can only be used once per chain.",
+            parse_mode="Markdown"
+        )
+
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.message or not update.message.text:
             return
@@ -297,33 +355,25 @@ class TelegramBot:
         chat_id = update.effective_chat.id
         user_id = update.effective_user.id
 
-        # Route to the game this user is currently playing
         wordle_player = _who_is_playing(chat_id, "wordle_tg")
         unscramble_player = _who_is_playing(chat_id, "unscramble_tg")
         chain_player = _who_is_playing(chat_id, "word_chain_tg")
 
-        # Word chain — only if this user is the chain player
         if chain_player == user_id:
             _touch_game(chat_id, user_id, "word_chain_tg")
-            handled = await self._word_chain.handle_word(update, context, text)
-            if handled:
+            if await self._word_chain.handle_word(update, context, text):
                 return
 
-        # Wordle — only if this user is the wordle player
         if wordle_player == user_id and len(text) == 5 and text.isalpha():
             _touch_game(chat_id, user_id, "wordle_tg")
-            handled = await self._wordle.handle_guess(update, context, text)
-            if handled:
-                # Release if finished
+            if await self._wordle.handle_guess(update, context, text):
                 if await self._wordle.is_finished(chat_id, user_id):
                     _release_game(chat_id, user_id, "wordle_tg")
                 return
 
-        # Unscramble — only if this user is the unscramble player
         if unscramble_player == user_id and text.isalpha():
             _touch_game(chat_id, user_id, "unscramble_tg")
-            handled = await self._unscramble.handle_guess(update, context, text)
-            if handled:
+            if await self._unscramble.handle_guess(update, context, text):
                 if await self._unscramble.is_finished(chat_id, user_id):
                     _release_game(chat_id, user_id, "unscramble_tg")
                 return
@@ -342,8 +392,12 @@ class TelegramBot:
         app.add_handler(CommandHandler("unscramble", self.cmd_unscramble))
         app.add_handler(CommandHandler("wordchain", self.cmd_wordchain))
         app.add_handler(CommandHandler("stopchain", self.cmd_stopchain))
+        app.add_handler(CommandHandler("end", self.cmd_end))
         app.add_handler(CommandHandler("hint", self.cmd_hint))
         app.add_handler(CommandHandler("skip", self.cmd_skip))
+        app.add_handler(CommandHandler("wordlehelp", self.cmd_wordlehelp))
+        app.add_handler(CommandHandler("unscramblehelp", self.cmd_unscramblehelp))
+        app.add_handler(CommandHandler("wordchainhelp", self.cmd_wordchainhelp))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
 
         log.info("Telegram bot starting (discovery_mode=%s)", _discovery_mode())
@@ -366,22 +420,16 @@ def build_telegram_bot(*, services: dict[str, Any], token: str) -> TelegramBot:
         wordle=TelegramWordleGame(
             games_repo=services["games_repo"],
             users_repo=services["users_repo"],
-            economy=services["economy"],
-            rewards=services["rewards"],
             wordlist=services["wordlist"],
         ),
         unscramble=TelegramUnscrambleGame(
             games_repo=services["games_repo"],
             users_repo=services["users_repo"],
-            economy=services["economy"],
-            rewards=services["rewards"],
             wordlist=services["wordlist"],
         ),
         word_chain=TelegramWordChainGame(
             games_repo=services["games_repo"],
             users_repo=services["users_repo"],
-            economy=services["economy"],
-            rewards=services["rewards"],
             wordlist=services["wordlist"],
         ),
     )
