@@ -112,6 +112,15 @@ class TelegramWordleGame:
         )
         return session_id, state
 
+    async def is_finished(self, chat_id: int, user_id: int) -> bool:
+        result = await self._get_or_create_session(chat_id)
+        if not result:
+            return True
+        _, state = result
+        players = state.get("players", {})
+        progress = players.get(str(user_id), {})
+        return bool(progress.get("finished", False))
+
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = update.effective_chat.id
         result = await self._get_or_create_session(chat_id)

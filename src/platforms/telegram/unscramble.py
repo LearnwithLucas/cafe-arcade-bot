@@ -76,6 +76,13 @@ class TelegramUnscrambleGame:
         except Exception:
             return None
 
+    async def is_finished(self, chat_id: int, user_id: int) -> bool:
+        result = await self._get_active(chat_id, user_id)
+        if not result:
+            return True
+        _, state = result
+        return bool(state.get("finished", False))
+
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = update.effective_chat.id
         user_id = update.effective_user.id
