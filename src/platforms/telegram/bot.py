@@ -312,34 +312,32 @@ class TelegramBot:
         if not await self._guard(update):
             return
         await update.message.reply_text(
-            "\U0001f500 *Unscramble*\n\n"
+            "\U0001f500 Unscramble\n\n"
             "A word has been scrambled. Put the letters back in the right order.\n\n"
             "You have 3 guesses. The word is between 5 and 8 letters long.\n\n"
-            "*Commands:*\n"
-            "/unscramble \u2014 start a new game\n"
-            "/hint \u2014 see the first letter and word length\n"
-            "/skip \u2014 give up and reveal the word\n"
-            "/end \u2014 end your current game\n\n"
+            "Commands:\n"
+            "/unscramble - start a new game\n"
+            "/hint - see the first letter and word length\n"
+            "/skip - give up and reveal the word\n"
+            "/end - end your current game\n\n"
             "Type your answer as a normal message.\n\n"
-            "One player at a time. If someone goes quiet for 3 minutes the slot opens up.",
-            parse_mode="Markdown"
+            "One player at a time. If someone goes quiet for 3 minutes the slot opens up."
         )
 
     async def cmd_wordchainhelp(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._guard(update):
             return
         await update.message.reply_text(
-            "\u26d3\ufe0f *Word Chain*\n\n"
+            "\u26d3\ufe0f Word Chain\n\n"
             "Build a chain of words. Each word must start with the last letter of the previous word.\n\n"
-            "Example: APPLE \u2192 ELEPHANT \u2192 TIGER \u2192 RABBIT\n\n"
+            "Example: APPLE -> ELEPHANT -> TIGER -> RABBIT\n\n"
             "The chain keeps going until someone uses /stopchain.\n\n"
-            "*Commands:*\n"
-            "/wordchain \u2014 start a new chain\n"
-            "/stopchain \u2014 end the current chain\n"
-            "/end \u2014 end your session\n\n"
+            "Commands:\n"
+            "/wordchain - start a new chain\n"
+            "/stopchain - end the current chain\n"
+            "/end - end your session\n\n"
             "Type your word as a normal message.\n\n"
-            "Words must be real English words and can only be used once per chain.",
-            parse_mode="Markdown"
+            "Words must be real English words and can only be used once per chain."
         )
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
