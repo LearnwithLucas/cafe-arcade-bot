@@ -4,7 +4,6 @@ import json
 import logging
 import random
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 from telegram import Update
@@ -21,10 +20,6 @@ EMOJI_YELLOW = "\U0001f7e8"
 EMOJI_RED = "\U0001f7e5"
 MAX_GUESSES = 12
 PLATFORM = "telegram"
-
-
-def _utc_date_str() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 def _evaluate_guess(answer: str, guess: str) -> list[str]:
@@ -78,36 +73,35 @@ class TelegramWordleGame:
                     pass
         return "crane"
 
-    async def _get_or_create_session(self, chat_id: int) -> tuple[str, dict[str, Any]] | None:
-        location_id = str(chat_id)
+    async def _get_active_session(self, chat_id: int) -> tuple[str, dict[str, Any]] | None:
+        """Return the current active session if one exists."""
         sess = await self._games_repo.get_active_session(
-            platform=PLATFORM, location_id=location_id, thread_id=None, game_key=self.key
+            platform=PLATFORM, location_id=str(chat_id), thread_id=None, game_key=self.key
         )
-        if sess:
-            try:
-                state = json.loads(sess.state_json)
-                if state.get("date") == _utc_date_str():
-                    return sess.id, state
-            except Exception:
-                pass
+        if not sess:
+            return None
+        try:
+            return sess.id, json.loads(sess.state_json)
+        except Exception:
+            return None
 
-        # New session
-        date_str = _utc_date_str()
+    async def _new_session(self, chat_id: int) -> tuple[str, dict[str, Any]] | None:
+        """End any current session and start a fresh one."""
         answer = self._pick_word()
         await self._games_repo.end_active_in_location(
-            platform=PLATFORM, location_id=location_id, thread_id=None,
+            platform=PLATFORM, location_id=str(chat_id), thread_id=None,
             game_key=self.key, status="ended"
         )
-        session_id = f"{self.key}:{chat_id}:{date_str}"
-        state = {"date": date_str, "answer": answer, "players": {}}
+        session_id = f"{self.key}:{chat_id}:{int(time.time())}"
+        state = {"answer": answer, "players": {}, "solves": 0}
         await self._games_repo.upsert_active_session(
-            session_id=session_id, platform=PLATFORM, location_id=location_id,
+            session_id=session_id, platform=PLATFORM, location_id=str(chat_id),
             thread_id=None, game_key=self.key, state=state
         )
         return session_id, state
 
     async def is_finished(self, chat_id: int, user_id: int) -> bool:
-        result = await self._get_or_create_session(chat_id)
+        result = await self._get_active_session(chat_id)
         if not result:
             return True
         _, state = result
@@ -131,7 +125,7 @@ class TelegramWordleGame:
     async def cmd_hint(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = update.effective_chat.id
         user_id = update.effective_user.id
-        result = await self._get_or_create_session(chat_id)
+        result = await self._get_active_session(chat_id)
         if not result:
             await update.message.reply_text("No active Wordle. Use /wordle to start.")
             return
@@ -162,19 +156,18 @@ class TelegramWordleGame:
             await update.message.reply_text(f"'{guess}' is not in the word list.")
             return True
 
-        result = await self._get_or_create_session(chat_id)
+        result = await self._get_active_session(chat_id)
         if not result:
             return False
         sess_id, state = result
 
-        date_str = state["date"]
         answer = state["answer"].lower()
         players: dict[str, Any] = state.get("players", {}) or {}
         pid = str(user_id)
         progress = players.get(pid, {"guesses": [], "rows": [], "finished": False, "solved": False, "best_green": 0})
 
         if progress["finished"]:
-            await update.message.reply_text("Your game is already done. Wait for tomorrow's puzzle or use /wordle.")
+            await update.message.reply_text("Game over. Use /wordle to start a new one.")
             return True
 
         if guess in progress["guesses"]:
