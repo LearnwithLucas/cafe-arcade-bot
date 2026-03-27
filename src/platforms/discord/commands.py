@@ -591,6 +591,47 @@ class GamesCommands(app_commands.Group):
         )
 
 
+
+# =====================
+# NIET VS GEEN COMMANDS
+# =====================
+
+class NietGeenCommands:
+    """Registers /nietgeen and /stopnietgeen as standalone slash commands."""
+
+    def __init__(self, *, services: dict[str, Any]) -> None:
+        self._services = services
+
+
+def _register_niet_geen_commands(bot: discord.Client, services: dict[str, Any]) -> None:
+    niet_geen = services.get("niet_geen")
+    if not niet_geen:
+        return
+
+    @bot.tree.command(name="nietgeen", description="Start het Niet vs Geen spel")
+    async def cmd_niet_geen(interaction: discord.Interaction) -> None:
+        if interaction.channel_id != 1487175077702275273:
+            await interaction.response.send_message(
+                "Dit commando werkt alleen in het niet-vs-geen kanaal.", ephemeral=True
+            )
+            return
+        await interaction.response.defer()
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await niet_geen.start_game(channel)
+
+    @bot.tree.command(name="stopnietgeen", description="Stop het huidige Niet vs Geen spel")
+    async def cmd_stop_niet_geen(interaction: discord.Interaction) -> None:
+        if interaction.channel_id != 1487175077702275273:
+            await interaction.response.send_message(
+                "Dit commando werkt alleen in het niet-vs-geen kanaal.", ephemeral=True
+            )
+            return
+        await interaction.response.defer()
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await niet_geen.stop_game(channel)
+
 # =====================
 # SETUP
 # =====================
@@ -629,10 +670,7 @@ async def setup(bot: discord.Client) -> None:
 
     if "inventory" not in existing:
         if _has_service(services, "shop"):
-            bot.tree.add_command(InventoryCommands(
-                services=services,
-                dutch_guild_id=int(getattr(getattr(bot, "settings", None), "dutch_guild_id", None) or 0) or None,
-            ))
+            bot.tree.add_command(InventoryCommands(services=services))
         else:
             logger.warning("shop service not found; /inventory not registered")
 
@@ -653,6 +691,10 @@ async def setup(bot: discord.Client) -> None:
 
     if "admin" not in existing:
         bot.tree.add_command(AdminCommands(services=services))
+
+    # Niet vs Geen
+    if "nietgeen" not in existing:
+        _register_niet_geen_commands(bot, services)
 
     logger.info(
         "Discord commands registered: %s",

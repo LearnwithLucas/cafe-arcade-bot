@@ -59,6 +59,18 @@ async def setup(bot: discord.Client) -> None:
             logger.exception("Error in geo_language.handle_discord_message")
 
         # -----------------------------
+        # Niet vs Geen
+        # -----------------------------
+        try:
+            niet_geen = services.get("niet_geen")
+            if niet_geen and hasattr(niet_geen, "handle_discord_message"):
+                consumed = await niet_geen.handle_discord_message(message)
+                if consumed:
+                    return
+        except Exception:
+            logger.exception("Error in niet_geen.handle_discord_message")
+
+        # -----------------------------
         # Everything else via registry
         # (Wordle/WordChain/Unscramble/etc)
         # -----------------------------

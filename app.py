@@ -40,9 +40,9 @@ from src.games.geoguessr.language_game import GeoLanguageGame
 from src.games.dutch.wordle_nl import DutchWordleGame
 from src.games.dutch.unscramble_nl import DutchUnscrambleGame
 from src.games.dutch.word_chain_nl import DutchWordChainGame
+from src.games.dutch.niet_geen import NietGeenGame
 
 from src.platforms.discord.bot import build_discord_bot
-from src.platforms.telegram.bot import build_telegram_bot
 
 
 # ---- Channel IDs (Discord — English server) ----
@@ -260,6 +260,15 @@ async def main() -> None:
     )
     game_registry.register(word_chain_nl)
 
+    # --- Games: Niet vs Geen ---
+    niet_geen_game = NietGeenGame(
+        games_repo=games_repo,
+        users_repo=users_repo,
+        economy=economy_service,
+        rewards=rewards,
+        allowed_channel_ids={1487175077702275273},
+    )
+
     # --- Games: Geo Learning ---
     geo_learning_bank = GeoLearningBank()
     geo_learning = None
@@ -328,6 +337,7 @@ async def main() -> None:
         "wordle_nl": wordle_nl,
         "unscramble_nl": unscramble_nl,
         "word_chain_nl": word_chain_nl,
+        "niet_geen": niet_geen_game,
         # geo
         "geo_learning_bank": geo_learning_bank,
         "geo_learning": geo_learning,
@@ -339,28 +349,10 @@ async def main() -> None:
     # --- Discord bot ---
     discord_bot = build_discord_bot(settings=settings, services=services)
 
-    # --- Telegram bot (optional) ---
-    telegram_token = settings.telegram_token
-    telegram_bot = build_telegram_bot(services=services, token=telegram_token) if telegram_token else None
-
-    async def run_discord() -> None:
-        try:
-            await discord_bot.start(settings.discord_token)
-        finally:
-            await db.close()
-
-    async def run_telegram() -> None:
-        if telegram_bot:
-            await telegram_bot.run()
-
     try:
-        if telegram_bot:
-            await asyncio.gather(run_discord(), run_telegram())
-        else:
-            await run_discord()
+        await discord_bot.start(settings.discord_token)
     finally:
-        if telegram_bot:
-            await telegram_bot.stop()
+        await db.close()
 
 
 if __name__ == "__main__":
