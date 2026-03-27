@@ -41,6 +41,7 @@ from src.games.dutch.wordle_nl import DutchWordleGame
 from src.games.dutch.unscramble_nl import DutchUnscrambleGame
 from src.games.dutch.word_chain_nl import DutchWordChainGame
 from src.games.dutch.niet_geen import NietGeenGame
+from src.games.unfair_quiz import UnfairQuizGame
 
 from src.platforms.discord.bot import build_discord_bot
 
@@ -269,6 +270,9 @@ async def main() -> None:
         allowed_channel_ids={1487175077702275273},
     )
 
+    # --- Games: Unfair Quiz ---
+    unfair_quiz = UnfairQuizGame()
+
     # --- Games: Geo Learning ---
     geo_learning_bank = GeoLearningBank()
     geo_learning = None
@@ -338,6 +342,7 @@ async def main() -> None:
         "unscramble_nl": unscramble_nl,
         "word_chain_nl": word_chain_nl,
         "niet_geen": niet_geen_game,
+        "unfair_quiz": unfair_quiz,
         # geo
         "geo_learning_bank": geo_learning_bank,
         "geo_learning": geo_learning,

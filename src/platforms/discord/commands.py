@@ -632,6 +632,41 @@ def _register_niet_geen_commands(bot: discord.Client, services: dict[str, Any]) 
         if isinstance(channel, discord.TextChannel):
             await niet_geen.stop_game(channel, interaction.user)
 
+
+
+def _register_unfair_quiz_commands(bot: discord.Client, services: dict[str, Any]) -> None:
+    quiz = services.get("unfair_quiz")
+    if not quiz:
+        return
+
+    @bot.tree.command(name="unfairquiz", description="Start the Unfair Quiz — 30 tricky questions")
+    async def cmd_unfairquiz(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await quiz.start(channel, is_nl=False)
+
+    @bot.tree.command(name="stopunfairquiz", description="Stop the current Unfair Quiz")
+    async def cmd_stopunfairquiz(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await quiz.stop(channel)
+
+    @bot.tree.command(name="oneerlijkquiz", description="Start de Oneerlijke Quiz — 30 strikvragen")
+    async def cmd_oneerlijkquiz(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await quiz.start(channel, is_nl=True)
+
+    @bot.tree.command(name="stoponeerlijkquiz", description="Stop de huidige Oneerlijke Quiz")
+    async def cmd_stoponeerlijkquiz(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await quiz.stop(channel)
+
 # =====================
 # SETUP
 # =====================
@@ -695,6 +730,10 @@ async def setup(bot: discord.Client) -> None:
     # Niet vs Geen
     if "nietgeen" not in existing:
         _register_niet_geen_commands(bot, services)
+
+    # Unfair Quiz
+    if "unfairquiz" not in existing:
+        _register_unfair_quiz_commands(bot, services)
 
     logger.info(
         "Discord commands registered: %s",
