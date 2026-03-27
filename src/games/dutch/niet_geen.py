@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import random
 import logging
+import random
+import time
 from dataclasses import dataclass, field
-from typing import Any
 
 import discord
 
@@ -18,227 +17,435 @@ from src.db.repo.economy_repo import GUILD_NL
 log = logging.getLogger("games.niet_geen")
 
 CHANNEL_ID = 1487175077702275273
-ROUNDS_PER_GAME = 7
 BEANS_CORRECT = 3
-BEANS_PERFECT = 10   # bonus for perfect score on top of per-round beans
+BEANS_STREAK_BONUS = 2    # extra per 3-in-a-row streak
+ROUND_SECONDS = 15
 
-# ---- Question bank ----
-# Each entry: (sentence_with_blank, answer, explanation)
-# _____ is always the blank. Answer is 'niet' or 'geen'.
 
 QUESTIONS: list[tuple[str, str, str]] = [
+    # --- GEEN: indefinite singular nouns ---
     (
         "Ik heb _____ auto.",
         "geen",
-        "Test: kun je 'een auto' zeggen? Ja. Gebruik dan **geen**.\n"
-        "Ik heb **geen** auto."
-    ),
-    (
-        "Het is _____ leuk.",
-        "niet",
-        "Test: kun je 'een leuk' zeggen? Nee, 'leuk' is een bijvoeglijk naamwoord. Gebruik dan **niet**.\n"
-        "Het is **niet** leuk."
-    ),
-    (
-        "We hebben _____ geld.",
-        "geen",
-        "Test: kun je 'een geld' zeggen? Ja, geld is een onbepaald zelfstandig naamwoord. Gebruik dan **geen**.\n"
-        "We hebben **geen** geld."
-    ),
-    (
-        "Ik ben _____ moe.",
-        "niet",
-        "Test: kun je 'een moe' zeggen? Nee, 'moe' is een bijvoeglijk naamwoord. Gebruik dan **niet**.\n"
-        "Ik ben **niet** moe."
-    ),
-    (
-        "Er is _____ probleem.",
-        "geen",
-        "Test: kun je 'een probleem' zeggen? Ja. Gebruik dan **geen**.\n"
-        "Er is **geen** probleem."
-    ),
-    (
-        "Ik kom _____ vandaag.",
-        "niet",
-        "Test: 'vandaag' is geen zelfstandig naamwoord, het is een bijwoord. Gebruik dan **niet**.\n"
-        "Ik kom **niet** vandaag."
-    ),
-    (
-        "Zij heeft _____ hond.",
-        "geen",
-        "Test: kun je 'een hond' zeggen? Ja. Gebruik dan **geen**.\n"
-        "Zij heeft **geen** hond."
-    ),
-    (
-        "Ik zie de auto _____.",
-        "niet",
-        "Test: 'de auto' is bepaald (met 'de'). Bij bepaalde lidwoorden gebruik je **niet**, en het staat aan het einde van de zin.\n"
-        "Ik zie de auto **niet**."
-    ),
-    (
-        "Hij heeft _____ tijd.",
-        "geen",
-        "Test: kun je 'een tijd' zeggen? Ja. Gebruik dan **geen**.\n"
-        "Hij heeft **geen** tijd."
-    ),
-    (
-        "Dit is _____ goed idee.",
-        "geen",
-        "Test: kun je 'een goed idee' zeggen? Ja. Gebruik dan **geen**.\n"
-        "Dit is **geen** goed idee."
-    ),
-    (
-        "Ik werk _____ morgen.",
-        "niet",
-        "Test: 'morgen' is een bijwoord, geen zelfstandig naamwoord. Gebruik dan **niet**.\n"
-        "Ik werk **niet** morgen."
-    ),
-    (
-        "We hebben _____ brood meer.",
-        "geen",
-        "Test: kun je 'een brood' zeggen? Ja. Gebruik dan **geen**.\n"
-        "We hebben **geen** brood meer."
-    ),
-    (
-        "Ik vind het _____ moeilijk.",
-        "niet",
-        "Test: kun je 'een moeilijk' zeggen? Nee, 'moeilijk' is een bijvoeglijk naamwoord. Gebruik dan **niet**.\n"
-        "Ik vind het **niet** moeilijk."
-    ),
-    (
-        "Er zijn _____ stoelen.",
-        "geen",
-        "Test: kun je 'een stoel' zeggen? Ja (enkelvoud). Bij meervoud zonder lidwoord gebruik je ook **geen**.\n"
-        "Er zijn **geen** stoelen."
-    ),
-    (
-        "Ze spreekt _____ Nederlands.",
-        "geen",
-        "Test: kun je 'een Nederlands' zeggen? Taal als onbepaald zelfstandig naamwoord krijgt **geen**.\n"
-        "Ze spreekt **geen** Nederlands."
-    ),
-    (
-        "Ik snap het _____.",
-        "niet",
-        "Test: 'het' is bepaald. Bij bepaalde lidwoorden gebruik je **niet**.\n"
-        "Ik snap het **niet**."
+        "**geen** - 'een auto' kan. Geen vervangt het onbepaald lidwoord 'een'.\nIk heb **geen** auto.",
     ),
     (
         "Dit is _____ probleem.",
         "geen",
-        "Test: kun je 'een probleem' zeggen? Ja. Gebruik dan **geen**.\n"
-        "Dit is **geen** probleem."
+        "**geen** - 'een probleem' kan. Geen vervangt 'een'.\nDit is **geen** probleem.",
+    ),
+    (
+        "Zij heeft _____ hond.",
+        "geen",
+        "**geen** - 'een hond' kan. Geen vervangt 'een'.\nZij heeft **geen** hond.",
+    ),
+    (
+        "Hij heeft _____ baan.",
+        "geen",
+        "**geen** - 'een baan' kan. Geen vervangt 'een'.\nHij heeft **geen** baan.",
+    ),
+    (
+        "We hebben _____ tafel.",
+        "geen",
+        "**geen** - 'een tafel' kan. Geen vervangt 'een'.\nWe hebben **geen** tafel.",
+    ),
+    (
+        "Er is _____ bus vandaag.",
+        "geen",
+        "**geen** - 'een bus' kan. Geen vervangt 'een'.\nEr is **geen** bus vandaag.",
+    ),
+    (
+        "Ik heb _____ pen bij me.",
+        "geen",
+        "**geen** - 'een pen' kan. Geen vervangt 'een'.\nIk heb **geen** pen bij me.",
+    ),
+    (
+        "Dit is _____ goed idee.",
+        "geen",
+        "**geen** - 'een goed idee' kan. Het bijvoeglijk naamwoord hoort bij het zelfstandig naamwoord.\nDit is **geen** goed idee.",
+    ),
+    (
+        "Hij is _____ leraar.",
+        "geen",
+        "**geen** - 'een leraar' kan. Beroepen zijn onbepaalde zelfstandige naamwoorden.\nHij is **geen** leraar.",
+    ),
+    (
+        "Ze heeft _____ zus.",
+        "geen",
+        "**geen** - 'een zus' kan. Geen vervangt 'een'.\nZe heeft **geen** zus.",
+    ),
+    # --- GEEN: mass / uncountable nouns ---
+    (
+        "We hebben _____ geld.",
+        "geen",
+        "**geen** - geld is een stofnaam. Stofnamen zonder lidwoord krijgen geen.\nWe hebben **geen** geld.",
+    ),
+    (
+        "Hij heeft _____ tijd.",
+        "geen",
+        "**geen** - 'een tijd' kan. Geen vervangt 'een'.\nHij heeft **geen** tijd.",
+    ),
+    (
+        "Er is _____ water meer.",
+        "geen",
+        "**geen** - stofnamen zonder lidwoord krijgen geen.\nEr is **geen** water meer.",
+    ),
+    (
+        "We hebben _____ brood.",
+        "geen",
+        "**geen** - stofnamen zonder lidwoord krijgen geen.\nWe hebben **geen** brood.",
+    ),
+    (
+        "Ze heeft _____ geduld.",
+        "geen",
+        "**geen** - 'geduld' is een onbepaald zelfstandig naamwoord.\nZe heeft **geen** geduld.",
+    ),
+    # --- GEEN: plurals ---
+    (
+        "Er zijn _____ stoelen.",
+        "geen",
+        "**geen** - meervoud zonder lidwoord krijgt geen. Test: 'een stoel' kan in enkelvoud.\nEr zijn **geen** stoelen.",
+    ),
+    (
+        "We hebben _____ boodschappen gedaan.",
+        "geen",
+        "**geen** - meervoud zonder lidwoord krijgt geen.\nWe hebben **geen** boodschappen gedaan.",
+    ),
+    (
+        "Er zijn _____ kaartjes meer.",
+        "geen",
+        "**geen** - meervoud zonder lidwoord krijgt geen.\nEr zijn **geen** kaartjes meer.",
+    ),
+    (
+        "Ze heeft _____ vrienden hier.",
+        "geen",
+        "**geen** - meervoud zonder lidwoord krijgt geen.\nZe heeft **geen** vrienden hier.",
+    ),
+    (
+        "Er zijn _____ goede restaurants hier.",
+        "geen",
+        "**geen** - meervoud zonder lidwoord krijgt geen.\nEr zijn **geen** goede restaurants hier.",
+    ),
+    # --- GEEN: languages, abstract, experience ---
+    (
+        "Ze spreekt _____ Nederlands.",
+        "geen",
+        "**geen** - taalnames als onbepaald zelfstandig naamwoord krijgen geen.\nZe spreekt **geen** Nederlands.",
+    ),
+    (
+        "Hij heeft _____ ervaring.",
+        "geen",
+        "**geen** - 'een ervaring' kan. Geen vervangt 'een'.\nHij heeft **geen** ervaring.",
+    ),
+    (
+        "We hebben _____ informatie gekregen.",
+        "geen",
+        "**geen** - 'informatie' is een onbepaald zelfstandig naamwoord.\nWe hebben **geen** informatie gekregen.",
+    ),
+    (
+        "Er is _____ bewijs.",
+        "geen",
+        "**geen** - 'een bewijs' kan. Geen vervangt 'een'.\nEr is **geen** bewijs.",
+    ),
+    (
+        "Ze heeft _____ zin.",
+        "geen",
+        "**geen** - 'een zin' kan. Geen vervangt 'een'.\nZe heeft **geen** zin.",
+    ),
+    # --- NIET: adjectives ---
+    (
+        "Het is _____ leuk.",
+        "niet",
+        "**niet** - 'leuk' is een bijvoeglijk naamwoord. Test: 'een leuk' kan niet.\nHet is **niet** leuk.",
+    ),
+    (
+        "Ik ben _____ moe.",
+        "niet",
+        "**niet** - 'moe' is een bijvoeglijk naamwoord. Test: 'een moe' kan niet.\nIk ben **niet** moe.",
     ),
     (
         "Hij is _____ blij.",
         "niet",
-        "Test: kun je 'een blij' zeggen? Nee, 'blij' is een bijvoeglijk naamwoord. Gebruik dan **niet**.\n"
-        "Hij is **niet** blij."
+        "**niet** - 'blij' is een bijvoeglijk naamwoord. Test: 'een blij' kan niet.\nHij is **niet** blij.",
     ),
     (
-        "Ik heb _____ zin.",
-        "geen",
-        "Test: kun je 'een zin' zeggen? Ja. Gebruik dan **geen**.\n"
-        "Ik heb **geen** zin."
-    ),
-    (
-        "Ze komt _____ naar de les.",
+        "Ze is _____ ziek.",
         "niet",
-        "Test: er is geen zelfstandig naamwoord met 'een' — 'naar de les' is een vaste uitdrukking. Gebruik dan **niet**.\n"
-        "Ze komt **niet** naar de les."
+        "**niet** - 'ziek' is een bijvoeglijk naamwoord. Test: 'een ziek' kan niet.\nZe is **niet** ziek.",
+    ),
+    (
+        "Het eten is _____ lekker.",
+        "niet",
+        "**niet** - 'lekker' is een bijvoeglijk naamwoord. Test: 'een lekker' kan niet.\nHet eten is **niet** lekker.",
+    ),
+    (
+        "De film was _____ interessant.",
+        "niet",
+        "**niet** - 'interessant' is een bijvoeglijk naamwoord. Test: 'een interessant' kan niet.\nDe film was **niet** interessant.",
+    ),
+    (
+        "Het is _____ moeilijk.",
+        "niet",
+        "**niet** - 'moeilijk' is een bijvoeglijk naamwoord. Test: 'een moeilijk' kan niet.\nHet is **niet** moeilijk.",
+    ),
+    (
+        "De kamer is _____ groot.",
+        "niet",
+        "**niet** - 'groot' is een bijvoeglijk naamwoord. Test: 'een groot' kan niet.\nDe kamer is **niet** groot.",
+    ),
+    # --- NIET: verbs and adverbs ---
+    (
+        "Ik kom _____ vandaag.",
+        "niet",
+        "**niet** - 'vandaag' is een bijwoord. Werkwoorden en bijwoorden krijgen niet.\nIk kom **niet** vandaag.",
+    ),
+    (
+        "Ze werkt _____ morgen.",
+        "niet",
+        "**niet** - 'morgen' is een bijwoord. Werkwoorden en bijwoorden krijgen niet.\nZe werkt **niet** morgen.",
+    ),
+    (
+        "Hij slaapt _____ goed.",
+        "niet",
+        "**niet** - 'goed' is een bijwoord hier. Bijwoorden krijgen niet.\nHij slaapt **niet** goed.",
+    ),
+    (
+        "Ze antwoordt _____.",
+        "niet",
+        "**niet** - werkwoord krijgt niet.\nZe antwoordt **niet**.",
+    ),
+    (
+        "Hij luistert _____.",
+        "niet",
+        "**niet** - werkwoord krijgt niet.\nHij luistert **niet**.",
+    ),
+    (
+        "Ik vind het _____ leuk.",
+        "niet",
+        "**niet** - 'leuk' is een bijvoeglijk naamwoord. Test: 'een leuk' kan niet.\nIk vind het **niet** leuk.",
+    ),
+    (
+        "Ze lacht _____.",
+        "niet",
+        "**niet** - werkwoord krijgt niet.\nZe lacht **niet**.",
+    ),
+    # --- NIET: definite nouns (de/het + noun) ---
+    (
+        "Ik zie de auto _____.",
+        "niet",
+        "**niet** - 'de auto' heeft een bepaald lidwoord. Bepaalde zelfstandige naamwoorden krijgen niet, en niet staat aan het einde.\nIk zie de auto **niet**.",
+    ),
+    (
+        "Hij kent de regels _____.",
+        "niet",
+        "**niet** - 'de regels' is bepaald. Bepaalde zelfstandige naamwoorden krijgen niet.\nHij kent de regels **niet**.",
+    ),
+    (
+        "Ze begrijpt het probleem _____.",
+        "niet",
+        "**niet** - 'het probleem' is bepaald. Bepaalde zelfstandige naamwoorden krijgen niet.\nZe begrijpt het probleem **niet**.",
+    ),
+    (
+        "Ik hoor de muziek _____.",
+        "niet",
+        "**niet** - 'de muziek' is bepaald. Bepaalde zelfstandige naamwoorden krijgen niet.\nIk hoor de muziek **niet**.",
+    ),
+    (
+        "Ik begrijp het _____.",
+        "niet",
+        "**niet** - 'het' is een bepaald voornaamwoord. Bepaalde objecten krijgen niet, en niet staat aan het einde.\nIk begrijp het **niet**.",
+    ),
+    # --- Mixed / tricky ---
+    (
+        "Dat is _____ waar.",
+        "niet",
+        "**niet** - 'waar' is een bijvoeglijk naamwoord. Test: 'een waar' kan niet.\nDat is **niet** waar.",
+    ),
+    (
+        "Ze heeft _____ genoeg geld.",
+        "niet",
+        "**niet** - 'genoeg' is een bijwoord dat het geheel ontkent, geen zelfstandig naamwoord.\nZe heeft **niet** genoeg geld.",
+    ),
+    (
+        "Ik heb _____ zin in koffie.",
+        "geen",
+        "**geen** - 'zin' is een onbepaald zelfstandig naamwoord. Test: 'een zin' kan.\nIk heb **geen** zin in koffie.",
+    ),
+    (
+        "Hij is _____ thuis.",
+        "niet",
+        "**niet** - 'thuis' is een bijwoord, geen zelfstandig naamwoord.\nHij is **niet** thuis.",
+    ),
+    (
+        "We hebben _____ les vandaag.",
+        "geen",
+        "**geen** - 'een les' kan. Geen vervangt 'een'.\nWe hebben **geen** les vandaag.",
+    ),
+    (
+        "Dat hoeft _____ zo.",
+        "niet",
+        "**niet** - er is geen zelfstandig naamwoord. 'Zo' is een bijwoord.\nDat hoeft **niet** zo.",
+    ),
+    (
+        "Hij heeft _____ honger.",
+        "geen",
+        "**geen** - 'honger' is een onbepaald zelfstandig naamwoord. Test: 'een honger' kan.\nHij heeft **geen** honger.",
+    ),
+    (
+        "Ze is _____ klaar.",
+        "niet",
+        "**niet** - 'klaar' is een bijvoeglijk naamwoord. Test: 'een klaar' kan niet.\nZe is **niet** klaar.",
+    ),
+    (
+        "Ik heb _____ idee.",
+        "geen",
+        "**geen** - 'een idee' kan. Geen vervangt 'een'.\nIk heb **geen** idee.",
+    ),
+    (
+        "Het maakt _____ uit.",
+        "niet",
+        "**niet** - vaste uitdrukking met werkwoord. Werkwoorden krijgen niet.\nHet maakt **niet** uit.",
     ),
 ]
 
 
+
+
+# =======================================================
+# STATE
+# =======================================================
+
+@dataclass
+class _RoundState:
+    sentence: str
+    answer: str
+    explanation: str
+    question_number: int
+    answers: dict[str, str] = field(default_factory=dict)
+    names: dict[str, str] = field(default_factory=dict)
+
+
 @dataclass
 class _GameState:
-    question_indices: list[int]
-    current_round: int = 0        # 0-based index into question_indices
-    scores: dict[str, int] = field(default_factory=dict)   # user_id -> correct count
-    names: dict[str, str] = field(default_factory=dict)    # user_id -> display_name
-    answered_round: set[str] = field(default_factory=set)  # user_ids who answered this round
-    round_answers: dict[str, str] = field(default_factory=dict)  # uid -> 'niet'/'geen' for current round
-    finished: bool = False
-
-    def current_q(self) -> tuple[str, str, str]:
-        return QUESTIONS[self.question_indices[self.current_round]]
-
-    def total_rounds(self) -> int:
-        return len(self.question_indices)
+    round_number: int = 1
+    scores: dict[str, int] = field(default_factory=dict)
+    streaks: dict[str, int] = field(default_factory=dict)
+    names: dict[str, str] = field(default_factory=dict)
+    used_indices: set[int] = field(default_factory=set)
 
 
-def _make_question_embed(state: _GameState) -> discord.Embed:
-    sentence, _, _ = state.current_q()
-    round_num = state.current_round + 1
-    total = state.total_rounds()
+# =======================================================
+# EMBEDS
+# =======================================================
+
+def _question_embed(
+    round_state: _RoundState, game_state: _GameState, seconds_left: int
+) -> discord.Embed:
+    filled = int(seconds_left / ROUND_SECONDS * 10)
+    bar = "🟩" * filled + "⬜" * (10 - filled)
+
+    top = sorted(game_state.scores.items(), key=lambda x: -x[1])[:3]
+    score_str = "  ·  ".join(
+        f"{game_state.names.get(u, u)}: {s}" for u, s in top
+    ) if top else "Nog geen punten"
+
     embed = discord.Embed(
-        title=f"Niet of Geen? — Ronde {round_num}/{total}",
+        title=f"Niet of Geen? — Vraag {round_state.question_number}",
         description=(
-            f"**{sentence}**\n\n"
-            "Typ **niet** of **geen** in de chat."
+            f"**{round_state.sentence}**\n\n"
+            f"{bar} {seconds_left}s\n\n"
+            f"{score_str}"
         ),
     )
-    embed.set_footer(text="Iedereen kan meedoen. Typ je antwoord als gewoon bericht.")
+    embed.set_footer(
+        text=f"{len(round_state.answers)} antwoord(en)"
+    )
     return embed
 
 
-def _make_result_embed(
-    state: _GameState,
-    answer: str,
-    explanation: str,
-    correct_users: list[str],
-    wrong_users: list[str],
-) -> discord.Embed:
-    sentence, correct, _ = state.current_q()
-    filled = sentence.replace("_____", f"**{correct}**")
+def _result_embed(round_state: _RoundState, game_state: _GameState) -> discord.Embed:
+    correct = round_state.answer
+    right = [round_state.names.get(u, u) for u, a in round_state.answers.items() if a == correct]
+    wrong = [round_state.names.get(u, u) for u, a in round_state.answers.items() if a != correct]
 
-    correct_line = ", ".join(correct_users) if correct_users else "Niemand"
-    wrong_line = ", ".join(wrong_users) if wrong_users else "Niemand"
+    filled = round_state.sentence.replace("_____", f"**{correct}**")
+
+    top = sorted(game_state.scores.items(), key=lambda x: -x[1])[:5]
+    score_lines = "\n".join(
+        f"{i+1}. {game_state.names.get(u, u)} — {s} pt"
+        for i, (u, s) in enumerate(top)
+    ) if top else "Nog geen punten"
 
     embed = discord.Embed(
         title=f"Antwoord: **{correct.upper()}**",
         description=(
             f"{filled}\n\n"
-            f"{explanation}\n\n"
-            f"Goed: {correct_line}\n"
-            f"Fout: {wrong_line}"
+            f"{round_state.explanation}\n\n"
+            f"**Goed:** {', '.join(right) if right else 'Niemand'}\n"
+            f"**Fout:** {', '.join(wrong) if wrong else 'Niemand'}\n\n"
+            f"**Stand:**\n{score_lines}"
         ),
         color=discord.Color.green(),
     )
+    embed.set_footer(text="Volgende vraag over 4 seconden...")
     return embed
 
 
-def _make_final_embed(state: _GameState) -> discord.Embed:
-    total = state.total_rounds()
-    if not state.scores:
-        return discord.Embed(
-            title="Spel voorbij",
-            description="Niemand heeft meegedaan. Typ /nietgeen om opnieuw te beginnen.",
-        )
+# =======================================================
+# BUTTON VIEW
+# =======================================================
 
-    lines = []
-    for uid, score in sorted(state.scores.items(), key=lambda x: -x[1]):
-        name = state.names.get(uid, uid)
-        pct = int(score / total * 100)
-        medal = "🥇" if score == total else "🥈" if score >= total * 0.7 else "🥉" if score >= total * 0.5 else ""
-        lines.append(f"{medal} **{name}** — {score}/{total} ({pct}%)")
+class AnswerView(discord.ui.View):
+    def __init__(self, *, round_state: _RoundState, game_state: _GameState) -> None:
+        super().__init__(timeout=float(ROUND_SECONDS + 5))
+        self._round = round_state
+        self._game = game_state
 
-    embed = discord.Embed(
-        title="Eindstand — Niet vs Geen",
-        description="\n".join(lines) + "\n\nTyp **/nietgeen** om opnieuw te spelen.",
-        color=discord.Color.gold(),
-    )
-    embed.set_footer(text="De sneltest: kan ik 'een' zeggen? Ja = geen. Nee = niet.")
-    return embed
+    async def _handle(self, interaction: discord.Interaction, choice: str) -> None:
+        uid = str(interaction.user.id)
+        if uid in self._round.answers:
+            await interaction.response.send_message(
+                "Je hebt al geantwoord voor deze ronde.", ephemeral=True
+            )
+            return
 
+        self._round.answers[uid] = choice
+        self._round.names[uid] = interaction.user.display_name
+        self._game.names[uid] = interaction.user.display_name
+
+        is_correct = choice == self._round.answer
+        if is_correct:
+            await interaction.response.send_message("Goed!", ephemeral=True)
+        else:
+            await interaction.response.send_message(
+                f"Helaas. Het antwoord is **{self._round.answer}**.", ephemeral=True
+            )
+
+    @discord.ui.button(label="Niet", style=discord.ButtonStyle.primary, custom_id="ng:niet")
+    async def btn_niet(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._handle(interaction, "niet")
+
+    @discord.ui.button(label="Geen", style=discord.ButtonStyle.success, custom_id="ng:geen")
+    async def btn_geen(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._handle(interaction, "geen")
+
+
+class _DisabledView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(discord.ui.Button(
+            label="Niet", style=discord.ButtonStyle.secondary, disabled=True
+        ))
+        self.add_item(discord.ui.Button(
+            label="Geen", style=discord.ButtonStyle.secondary, disabled=True
+        ))
+
+
+# =======================================================
+# GAME CLASS
+# =======================================================
 
 class NietGeenGame:
-    """
-    Niet vs Geen — Dutch grammar game for the game bot.
-    Hooks into the existing game_registry via handle_discord_message.
-    Slash command /nietgeen starts a new game.
-    """
-
     key = "niet_geen"
     allowed_channel_ids: set[int] = {CHANNEL_ID}
 
@@ -258,161 +465,130 @@ class NietGeenGame:
         if allowed_channel_ids is not None:
             self.allowed_channel_ids = set(allowed_channel_ids)
 
-        # In-memory state: channel_id -> _GameState
         self._active: dict[int, _GameState] = {}
-        # Pending answer collection task per channel
-        self._collect_tasks: dict[int, asyncio.Task] = {}
-
-    # ---- Public: start a game ----
+        self._tasks: dict[int, asyncio.Task] = {}
 
     async def start_game(self, channel: discord.TextChannel) -> None:
-        if channel.id in self._active and not self._active[channel.id].finished:
-            await channel.send("Er loopt al een spel. Wacht tot het klaar is of typ **/stopnietgeen**.")
+        if channel.id in self._active:
+            await channel.send(
+                "Er loopt al een spel. Typ **/stopnietgeen** om te stoppen.",
+                delete_after=8,
+            )
             return
 
-        indices = random.sample(range(len(QUESTIONS)), k=ROUNDS_PER_GAME)
-        state = _GameState(question_indices=indices)
+        state = _GameState()
         self._active[channel.id] = state
-
         await channel.send(
-            "**Niet vs Geen — het spel**\n\n"
-            f"{ROUNDS_PER_GAME} rondes. Typ **niet** of **geen** als je het antwoord weet.\n"
-            "Iedereen kan meedoen. De sneltest: *kan ik 'een' zeggen? Ja = geen. Nee = niet.*\n\n"
-            "Eerste vraag:"
+            "**Niet vs Geen**\n\n"
+            "Druk op de knop als je weet welke het is. "
+            "Iedereen kan meedoen.\n\n"
+            "De sneltest: *kan ik 'een' zeggen? Ja = geen. Nee = niet.*"
         )
-        await self._post_question(channel, state)
+        task = asyncio.create_task(self._game_loop(channel, state))
+        self._tasks[channel.id] = task
 
     async def stop_game(self, channel: discord.TextChannel) -> None:
         state = self._active.pop(channel.id, None)
-        task = self._collect_tasks.pop(channel.id, None)
+        task = self._tasks.pop(channel.id, None)
         if task:
             task.cancel()
-        if state:
-            await channel.send("Spel gestopt.")
-        else:
+        if not state:
             await channel.send("Er is geen actief spel.")
+            return
 
-    # ---- Internal: game flow ----
-
-    async def _post_question(self, channel: discord.TextChannel, state: _GameState) -> None:
-        state.answered_round.clear()
-        state.round_answers.clear()
-        embed = _make_question_embed(state)
-        await channel.send(embed=embed)
-        # Collect answers for 20 seconds
-        task = asyncio.create_task(self._collect_answers(channel, state))
-        self._collect_tasks[channel.id] = task
-
-    async def _collect_answers(self, channel: discord.TextChannel, state: _GameState) -> None:
-        await asyncio.sleep(20)
-        await self._reveal_and_advance(channel, state)
-
-    async def _reveal_and_advance(self, channel: discord.TextChannel, state: _GameState) -> None:
-        self._collect_tasks.pop(channel.id, None)
-
-        _, correct, explanation = state.current_q()
-        correct_users = []
-        wrong_users = []
-
-        for uid, score in state.scores.items():
-            pass
-
-        round_answers = state.round_answers
-        for uid, given in round_answers.items():
-            name = state.names.get(uid, uid)
-            if given == correct:
-                correct_users.append(name)
-            else:
-                wrong_users.append(name)
-
-        embed = _make_result_embed(state, correct, explanation, correct_users, wrong_users)
-        await channel.send(embed=embed)
-
-        # Award beans
-        for uid, given in state.round_answers.items():
-            if given == correct:
-                try:
-                    uid_int = int(uid)
-                    await self._economy.award_beans_discord(
-                        user_id=uid_int,
-                        amount=BEANS_CORRECT,
-                        reason="Niet vs Geen correct",
-                        game_key=self.key,
-                        display_name=state.names.get(uid),
-                        guild_id=GUILD_NL,
-                    )
-                except Exception:
-                    log.exception("NietGeen: failed to award beans uid=%s", uid)
-
-        # Advance
-        state.current_round += 1
-        if state.current_round >= state.total_rounds():
-            await self._finish_game(channel, state)
+        if state.scores:
+            top = sorted(state.scores.items(), key=lambda x: -x[1])
+            lines = [
+                f"{i+1}. {state.names.get(u, u)} - {s} pt"
+                for i, (u, s) in enumerate(top[:5])
+            ]
+            await channel.send("**Spel gestopt. Eindstand:**\n" + "\n".join(lines))
         else:
-            await asyncio.sleep(3)
-            await self._post_question(channel, state)
+            await channel.send("Spel gestopt.")
 
-    async def _finish_game(self, channel: discord.TextChannel, state: _GameState) -> None:
-        state.finished = True
-        # Bonus beans for perfect score
-        total = state.total_rounds()
-        for uid, score in state.scores.items():
-            if score == total:
+    async def _game_loop(self, channel: discord.TextChannel, state: _GameState) -> None:
+        try:
+            while channel.id in self._active:
+                available = [i for i in range(len(QUESTIONS)) if i not in state.used_indices]
+                if not available:
+                    state.used_indices.clear()
+                    available = list(range(len(QUESTIONS)))
+                idx = random.choice(available)
+                state.used_indices.add(idx)
+                sentence, answer, explanation = QUESTIONS[idx]
+
+                round_state = _RoundState(
+                    sentence=sentence,
+                    answer=answer,
+                    explanation=explanation,
+                    question_number=state.round_number,
+                )
+
+                view = AnswerView(round_state=round_state, game_state=state)
+                embed = _question_embed(round_state, state, ROUND_SECONDS)
+                msg = await channel.send(embed=embed, view=view)
+
+                # Countdown: update embed at 10s and 5s remaining
+                await asyncio.sleep(ROUND_SECONDS - 10)
                 try:
-                    uid_int = int(uid)
-                    await self._economy.award_beans_discord(
-                        user_id=uid_int,
-                        amount=BEANS_PERFECT,
-                        reason="Niet vs Geen perfecte score bonus",
-                        game_key=self.key,
-                        display_name=state.names.get(uid),
-                        guild_id=GUILD_NL,
+                    await msg.edit(embed=_question_embed(round_state, state, 10), view=view)
+                except Exception:
+                    pass
+
+                await asyncio.sleep(5)
+                try:
+                    await msg.edit(embed=_question_embed(round_state, state, 5), view=view)
+                except Exception:
+                    pass
+
+                await asyncio.sleep(5)
+
+                # Disable buttons
+                try:
+                    await msg.edit(
+                        embed=_question_embed(round_state, state, 0),
+                        view=_DisabledView(),
                     )
                 except Exception:
-                    log.exception("NietGeen: failed to award perfect bonus uid=%s", uid)
+                    pass
 
-        embed = _make_final_embed(state)
-        await channel.send(embed=embed)
-        self._active.pop(channel.id, None)
+                # Score and award beans
+                correct = round_state.answer
+                for uid, given in round_state.answers.items():
+                    name = round_state.names.get(uid, uid)
+                    state.scores.setdefault(uid, 0)
+                    state.streaks.setdefault(uid, 0)
 
-    # ---- Message handler ----
+                    if given == correct:
+                        state.scores[uid] += 1
+                        state.streaks[uid] += 1
+                        beans = BEANS_CORRECT + (
+                            BEANS_STREAK_BONUS if state.streaks[uid] % 3 == 0 else 0
+                        )
+                        try:
+                            await self._economy.award_beans_discord(
+                                user_id=int(uid),
+                                amount=beans,
+                                reason="Niet vs Geen correct",
+                                game_key=self.key,
+                                display_name=name,
+                                guild_id=GUILD_NL,
+                            )
+                        except Exception:
+                            log.exception("NietGeen: bean award failed uid=%s", uid)
+                    else:
+                        state.streaks[uid] = 0
+
+                await channel.send(embed=_result_embed(round_state, state))
+                state.round_number += 1
+                await asyncio.sleep(4)
+
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            log.exception("NietGeen: crash channel=%s", channel.id)
+            self._active.pop(channel.id, None)
+            self._tasks.pop(channel.id, None)
 
     async def handle_discord_message(self, message: discord.Message) -> bool:
-        if message.channel.id not in self.allowed_channel_ids:
-            return False
-
-        state = self._active.get(message.channel.id)
-        if not state or state.finished:
-            return False
-
-        text = message.content.strip().lower()
-        if text not in ("niet", "geen"):
-            return False
-
-        uid = str(message.author.id)
-
-        # Only first answer per round counts
-        if uid in state.answered_round:
-            return True  # consume but ignore
-
-        state.answered_round.add(uid)
-        state.names[uid] = message.author.display_name
-
-        _, correct, _ = state.current_q()
-        is_correct = text == correct
-
-        state.round_answers[uid] = text
-
-        # Track score
-        if uid not in state.scores:
-            state.scores[uid] = 0
-        if is_correct:
-            state.scores[uid] += 1
-
-        # React to acknowledge
-        try:
-            await message.add_reaction("✅" if is_correct else "❌")
-        except Exception:
-            pass
-
-        return True
+        return False
