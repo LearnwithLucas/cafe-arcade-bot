@@ -615,10 +615,10 @@ def _register_niet_geen_commands(bot: discord.Client, services: dict[str, Any]) 
                 "Dit commando werkt alleen in het niet-vs-geen kanaal.", ephemeral=True
             )
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
-            await niet_geen.start_game(channel)
+            await niet_geen.start_game(channel, interaction.user)
 
     @bot.tree.command(name="stopnietgeen", description="Stop het huidige Niet vs Geen spel")
     async def cmd_stop_niet_geen(interaction: discord.Interaction) -> None:
@@ -627,10 +627,10 @@ def _register_niet_geen_commands(bot: discord.Client, services: dict[str, Any]) 
                 "Dit commando werkt alleen in het niet-vs-geen kanaal.", ephemeral=True
             )
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
-            await niet_geen.stop_game(channel)
+            await niet_geen.stop_game(channel, interaction.user)
 
 # =====================
 # SETUP
