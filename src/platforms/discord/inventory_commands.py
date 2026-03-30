@@ -115,13 +115,12 @@ class InventoryCommands(app_commands.Command):
             )
             return
 
-        service_key = "dutch_shop" if self._guild_id == GUILD_NL else "shop"
+        guild_id = _guild_id_for(self._dutch_guild_id, interaction.guild_id)
+        service_key = "dutch_shop" if guild_id == GUILD_NL else "shop"
         shop = self._services.get(service_key) or self._services.get("shop")
         if not shop:
             await interaction.response.send_message("Shop service not available.", ephemeral=True)
             return
-
-        guild_id = _guild_id_for(self._dutch_guild_id, interaction.guild_id)
         embed, rows = await self._render_inventory(
             discord_user_id=interaction.user.id,
             display_name=getattr(interaction.user, "display_name", None),
