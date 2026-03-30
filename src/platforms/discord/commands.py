@@ -373,8 +373,16 @@ class GamesCommands(app_commands.Group):
         if not word_chain:
             await interaction.response.send_message("Word Chain is not available.", ephemeral=True)
             return
-        await word_chain.start(channel=interaction.channel, started_by=interaction.user)
-        await interaction.response.send_message("⛓️ Word Chain started! Type a word to begin.", ephemeral=False)
+        embed = discord.Embed(
+            title="⛓️ Word Chain",
+            description="Type a word to begin. Each word must start with the last letter of the previous one.",
+        )
+        await interaction.response.send_message(embed=embed)
+        status_msg = await interaction.original_response()
+        await word_chain.start_in_channel(
+            channel_id=interaction.channel_id,
+            status_message_id=status_msg.id,
+        )
 
     @app_commands.command(name="wordle_start", description="Start today's Wordle")
     async def wordle_start(self, interaction: discord.Interaction) -> None:
@@ -596,6 +604,61 @@ class GamesCommands(app_commands.Group):
 # =====================
 
 
+
+def _register_niet_geen_commands(bot: discord.Client, services: dict[str, Any]) -> None:
+    niet_geen = services.get("niet_geen")
+    if not niet_geen:
+        return
+
+    @bot.tree.command(name="nietgeen", description="Start het Niet vs Geen spel")
+    async def cmd_niet_geen(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await niet_geen.start_game(channel, interaction.user)
+
+    @bot.tree.command(name="stopnietgeen", description="Stop je Niet vs Geen sessie")
+    async def cmd_stop_niet_geen(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await niet_geen.stop_game(channel, interaction.user)
+
+
+def _register_unfair_quiz_commands(bot: discord.Client, services: dict[str, Any]) -> None:
+    quiz = services.get("unfair_quiz")
+    if not quiz:
+        return
+
+    @bot.tree.command(name="unfairquiz", description="Start the Unfair Quiz — 30 tricky questions")
+    async def cmd_unfairquiz(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await quiz.start(channel, is_nl=False)
+
+    @bot.tree.command(name="stopunfairquiz", description="Stop the current Unfair Quiz")
+    async def cmd_stopunfairquiz(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await quiz.stop(channel)
+
+    @bot.tree.command(name="oneerlijkquiz", description="Start de Oneerlijke Quiz — 30 strikvragen")
+    async def cmd_oneerlijkquiz(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await quiz.start(channel, is_nl=True)
+
+    @bot.tree.command(name="stoponeerlijkquiz", description="Stop de huidige Oneerlijke Quiz")
+    async def cmd_stoponeerlijkquiz(interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await quiz.stop(channel)
+
+
 def _register_standalone_commands(bot: discord.Client, services: dict[str, Any]) -> None:
     """Standalone /balance and /bonen commands — work in any channel."""
     economy = services.get("economy")
@@ -713,6 +776,14 @@ async def setup(bot: discord.Client) -> None:
 
     if "admin" not in existing:
         bot.tree.add_command(AdminCommands(services=services))
+
+    # Niet vs Geen
+    if "nietgeen" not in existing:
+        _register_niet_geen_commands(bot, services)
+
+    # Unfair Quiz
+    if "unfairquiz" not in existing:
+        _register_unfair_quiz_commands(bot, services)
 
     # Standalone balance commands
     if "balance" not in existing:
