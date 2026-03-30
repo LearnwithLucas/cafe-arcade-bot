@@ -591,85 +591,72 @@ class GamesCommands(app_commands.Group):
         )
 
 
-
-# =====================
-# NIET VS GEEN COMMANDS
-# =====================
-
-class NietGeenCommands:
-    """Registers /nietgeen and /stopnietgeen as standalone slash commands."""
-
-    def __init__(self, *, services: dict[str, Any]) -> None:
-        self._services = services
-
-
-def _register_niet_geen_commands(bot: discord.Client, services: dict[str, Any]) -> None:
-    niet_geen = services.get("niet_geen")
-    if not niet_geen:
-        return
-
-    @bot.tree.command(name="nietgeen", description="Start het Niet vs Geen spel")
-    async def cmd_niet_geen(interaction: discord.Interaction) -> None:
-        if interaction.channel_id != 1487175077702275273:
-            await interaction.response.send_message(
-                "Dit commando werkt alleen in het niet-vs-geen kanaal.", ephemeral=True
-            )
-            return
-        await interaction.response.defer(ephemeral=True)
-        channel = interaction.channel
-        if isinstance(channel, discord.TextChannel):
-            await niet_geen.start_game(channel, interaction.user)
-
-    @bot.tree.command(name="stopnietgeen", description="Stop het huidige Niet vs Geen spel")
-    async def cmd_stop_niet_geen(interaction: discord.Interaction) -> None:
-        if interaction.channel_id != 1487175077702275273:
-            await interaction.response.send_message(
-                "Dit commando werkt alleen in het niet-vs-geen kanaal.", ephemeral=True
-            )
-            return
-        await interaction.response.defer(ephemeral=True)
-        channel = interaction.channel
-        if isinstance(channel, discord.TextChannel):
-            await niet_geen.stop_game(channel, interaction.user)
-
-
-
-def _register_unfair_quiz_commands(bot: discord.Client, services: dict[str, Any]) -> None:
-    quiz = services.get("unfair_quiz")
-    if not quiz:
-        return
-
-    @bot.tree.command(name="unfairquiz", description="Start the Unfair Quiz — 30 tricky questions")
-    async def cmd_unfairquiz(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True)
-        channel = interaction.channel
-        if isinstance(channel, discord.TextChannel):
-            await quiz.start(channel, is_nl=False)
-
-    @bot.tree.command(name="stopunfairquiz", description="Stop the current Unfair Quiz")
-    async def cmd_stopunfairquiz(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True)
-        channel = interaction.channel
-        if isinstance(channel, discord.TextChannel):
-            await quiz.stop(channel)
-
-    @bot.tree.command(name="oneerlijkquiz", description="Start de Oneerlijke Quiz — 30 strikvragen")
-    async def cmd_oneerlijkquiz(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True)
-        channel = interaction.channel
-        if isinstance(channel, discord.TextChannel):
-            await quiz.start(channel, is_nl=True)
-
-    @bot.tree.command(name="stoponeerlijkquiz", description="Stop de huidige Oneerlijke Quiz")
-    async def cmd_stoponeerlijkquiz(interaction: discord.Interaction) -> None:
-        await interaction.response.defer(ephemeral=True)
-        channel = interaction.channel
-        if isinstance(channel, discord.TextChannel):
-            await quiz.stop(channel)
-
 # =====================
 # SETUP
 # =====================
+
+
+def _register_standalone_commands(bot: discord.Client, services: dict[str, Any]) -> None:
+    """Standalone /balance and /bonen commands — work in any channel."""
+    economy = services.get("economy")
+    if not economy:
+        return
+
+    @bot.tree.command(name="balance", description="Check your bean balance")
+    async def cmd_balance(interaction: discord.Interaction) -> None:
+        is_nl = getattr(getattr(bot, "settings", None), "dutch_guild_id", None) and             interaction.guild_id == int(getattr(getattr(bot, "settings", None), "dutch_guild_id", 0) or 0)
+        guild_id = "nl" if is_nl else "en"
+        try:
+            bal = await economy.get_balance_discord(
+                user_id=interaction.user.id,
+                display_name=interaction.user.display_name,
+                guild_id=guild_id,
+            )
+            await interaction.response.send_message(
+                f"☕ You have **{bal}** beans.", ephemeral=True
+            )
+        except Exception:
+            await interaction.response.send_message("Could not fetch balance.", ephemeral=True)
+
+    @bot.tree.command(name="bonen", description="Bekijk je bonensaldo")
+    async def cmd_bonen(interaction: discord.Interaction) -> None:
+        try:
+            bal = await economy.get_balance_discord(
+                user_id=interaction.user.id,
+                display_name=interaction.user.display_name,
+                guild_id="nl",
+            )
+            await interaction.response.send_message(
+                f"☕ Je hebt **{bal}** bonen.", ephemeral=True
+            )
+        except Exception:
+            await interaction.response.send_message("Saldo kon niet worden opgehaald.", ephemeral=True)
+
+
+def _register_challenge_commands(bot: discord.Client, services: dict[str, Any]) -> None:
+    """Manual trigger commands for the daily challenge — admin only."""
+    challenge = services.get("daily_challenge")
+    if not challenge:
+        return
+
+    CHALLENGE_ADMIN_ID = 1181651144100036718
+
+    @bot.tree.command(name="challenge", description="Post today's English daily challenge now (admin)")
+    async def cmd_challenge(interaction: discord.Interaction) -> None:
+        if interaction.user.id != CHALLENGE_ADMIN_ID:
+            await interaction.response.send_message("Not for you.", ephemeral=True)
+            return
+        await interaction.response.send_message("Posting English challenge now.", ephemeral=True)
+        await challenge.post_en_now()
+
+    @bot.tree.command(name="uitdaging", description="Post de huidige dagelijkse uitdaging nu (admin)")
+    async def cmd_uitdaging(interaction: discord.Interaction) -> None:
+        if interaction.user.id != CHALLENGE_ADMIN_ID:
+            await interaction.response.send_message("Niet voor jou.", ephemeral=True)
+            return
+        await interaction.response.send_message("Nederlandse uitdaging wordt nu gepost.", ephemeral=True)
+        await challenge.post_nl_now()
+
 async def setup(bot: discord.Client) -> None:
     services: dict[str, Any] = getattr(bot, "services", {})
     existing = {c.name for c in bot.tree.get_commands()}
@@ -727,13 +714,13 @@ async def setup(bot: discord.Client) -> None:
     if "admin" not in existing:
         bot.tree.add_command(AdminCommands(services=services))
 
-    # Niet vs Geen
-    if "nietgeen" not in existing:
-        _register_niet_geen_commands(bot, services)
+    # Standalone balance commands
+    if "balance" not in existing:
+        _register_standalone_commands(bot, services)
 
-    # Unfair Quiz
-    if "unfairquiz" not in existing:
-        _register_unfair_quiz_commands(bot, services)
+    # Daily challenge commands
+    if "challenge" not in existing:
+        _register_challenge_commands(bot, services)
 
     logger.info(
         "Discord commands registered: %s",

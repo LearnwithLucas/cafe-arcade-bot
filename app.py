@@ -43,6 +43,7 @@ from src.games.dutch.word_chain_nl import DutchWordChainGame
 from src.games.dutch.niet_geen import NietGeenGame
 from src.games.unfair_quiz import UnfairQuizGame
 
+from src.jobs.daily_challenge import DailyChallengeJob
 from src.platforms.discord.bot import build_discord_bot
 
 
@@ -93,7 +94,7 @@ async def main() -> None:
 
     # --- English leaderboard publisher ---
     english_game_keys = ["word_chain", "wordle", "unscramble"]
-    dutch_game_keys = ["word_chain_nl", "wordle_nl", "unscramble_nl"]
+    dutch_game_keys = ["word_chain_nl", "wordle_nl", "unscramble_nl", "niet_geen", "unfair_quiz_nl"]
 
     leaderboard_publisher = LeaderboardPublisher(
         config=LeaderboardConfig(
@@ -117,7 +118,7 @@ async def main() -> None:
                 english_game_keys=dutch_game_keys,
                 limit=10,
                 debounce_seconds=10.0,
-                board_key="dutch_dropdown_v1",
+                board_key="dutch_dropdown_v2",
             ),
             leaderboard_repo=leaderboard_repo,
             posts_repo=leaderboard_posts_repo,
@@ -351,8 +352,20 @@ async def main() -> None:
         "geo_language": geo_language,
     }
 
+    # --- Daily Challenge ---
+    daily_challenge = DailyChallengeJob(
+        bot=None,  # set after bot is created
+        repo=users_repo,
+        en_guild_id=settings.discord_guild_id,
+        nl_guild_id=settings.dutch_guild_id,
+    )
+    services["daily_challenge"] = daily_challenge
+
     # --- Discord bot ---
     discord_bot = build_discord_bot(settings=settings, services=services)
+
+    daily_challenge._bot = discord_bot
+    daily_challenge._tick.start()
 
     try:
         await discord_bot.start(settings.discord_token)
