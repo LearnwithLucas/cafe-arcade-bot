@@ -382,7 +382,7 @@ class GamesCommands(app_commands.Group):
         if not wordle:
             await interaction.response.send_message("Wordle is not available.", ephemeral=True)
             return
-        await wordle.start_in_channel(channel=interaction.channel, channel_id=interaction.channel_id)
+        await wordle.start_in_channel(channel_id=interaction.channel_id)
         embed = discord.Embed(
             title="🧩 Wordle — Daily",
             description=(
