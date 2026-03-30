@@ -354,7 +354,6 @@ async def main() -> None:
 
     # --- Daily Challenge ---
     daily_challenge = DailyChallengeJob(
-        bot=None,  # set after bot is created
         repo=users_repo,
         en_guild_id=settings.discord_guild_id,
         nl_guild_id=settings.dutch_guild_id,
@@ -364,8 +363,7 @@ async def main() -> None:
     # --- Discord bot ---
     discord_bot = build_discord_bot(settings=settings, services=services)
 
-    daily_challenge._bot = discord_bot
-    daily_challenge._tick.start()
+    daily_challenge.start(discord_bot)
 
     try:
         await discord_bot.start(settings.discord_token)

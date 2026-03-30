@@ -263,17 +263,22 @@ class DailyChallengeJob:
     def __init__(
         self,
         *,
-        bot: discord.Client,
         repo,
         en_guild_id: int,
         nl_guild_id: int | None = None,
     ) -> None:
-        self._bot = bot
+        self._bot: discord.Client | None = None
         self._repo = repo
         self._en_guild_id = en_guild_id
         self._nl_guild_id = nl_guild_id
         self._tz = _get_tz()
-        self._tick.start()
+        # Loop is started via start() after bot is assigned
+
+    def start(self, bot: discord.Client) -> None:
+        """Call after the Discord bot is ready."""
+        self._bot = bot
+        if not self._tick.is_running():
+            self._tick.start()
 
     def _now(self) -> dt.datetime:
         return dt.datetime.now(tz=self._tz)
