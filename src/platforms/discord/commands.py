@@ -138,21 +138,21 @@ class CafeCommands(app_commands.Group):
             )
             return
         embed = discord.Embed(
-            title="☕ Café Bot — Help",
+            title="☕ Café Bot - Help",
             description=(
                 "**Economy**\n"
-                "`/cafe daily` — 25 beans (once/day)\n"
-                "`/cafe work` — 5 beans (once/hour)\n"
-                "`/cafe beans` — check balance\n\n"
+                "`/cafe daily` - 25 beans (once/day)\n"
+                "`/cafe work` - 5 beans (once/hour)\n"
+                "`/cafe beans` - check balance\n\n"
                 "**Games**\n"
-                "`/games wordle_start` — daily Wordle\n"
-                "`/games unscramble_start` — unscramble a word\n"
-                "`/games wordchain_start` — start word chain\n\n"
+                "`/games wordle_start` - daily Wordle\n"
+                "`/games unscramble_start` - unscramble a word\n"
+                "`/games wordchain_start` - start word chain\n\n"
                 "**Shop**\n"
-                "`/shop` — browse and buy items\n"
-                "`/inventory` — view owned items\n\n"
+                "`/shop` - browse and buy items\n"
+                "`/inventory` - view owned items\n\n"
                 "**Leaderboard**\n"
-                "`/cafe leaderboard` — refresh the leaderboard\n"
+                "`/cafe leaderboard` - refresh the leaderboard\n"
             ),
         )
         embed.set_thumbnail(url=AssetLinks.BEAN_CURRENCY_ICON)
@@ -230,22 +230,22 @@ class CafeCommands(app_commands.Group):
             )
             return
         embed = discord.Embed(
-            title="☕ Café Bot — Hulp",
+            title="☕ Café Bot - Hulp",
             description=(
                 "**Economie**\n"
-                "`/cafe dagelijks` — 25 bonen (één keer per dag)\n"
-                "`/cafe werk` — 5 bonen (één keer per uur)\n"
-                "`/cafe bonen` — bekijk je saldo\n"
-                "`/cafe portemonnee` — alias voor bonen\n\n"
+                "`/cafe dagelijks` - 25 bonen (één keer per dag)\n"
+                "`/cafe werk` - 5 bonen (één keer per uur)\n"
+                "`/cafe bonen` - bekijk je saldo\n"
+                "`/cafe portemonnee` - alias voor bonen\n\n"
                 "**Spellen**\n"
-                "`/games wordle_start` — dagelijkse Wordle\n"
-                "`/games unscramble_start` — ontwar een woord\n"
-                "`/games wordchain_start` — start woordketting\n\n"
+                "`/games wordle_start` - dagelijkse Wordle\n"
+                "`/games unscramble_start` - ontwar een woord\n"
+                "`/games wordchain_start` - start woordketting\n\n"
                 "**Winkel**\n"
-                "`/winkel` — bekijk en koop items\n"
-                "`/inventory` — bekijk je items\n\n"
+                "`/winkel` - bekijk en koop items\n"
+                "`/inventory` - bekijk je items\n\n"
                 "**Scorebord**\n"
-                "`/cafe scorebord` — vernieuw het scorebord\n"
+                "`/cafe scorebord` - vernieuw het scorebord\n"
             ),
         )
         embed.set_thumbnail(url=AssetLinks.BEAN_CURRENCY_ICON)
@@ -392,7 +392,7 @@ class GamesCommands(app_commands.Group):
             return
         await wordle.start_in_channel(channel_id=interaction.channel_id)
         embed = discord.Embed(
-            title="🧩 Wordle — Daily",
+            title="🧩 Wordle - Daily",
             description=(
                 "• 5-letter words\n• 12 guesses\n\n"
                 "🟩 correct spot\n🟨 wrong spot\n🟥 not in word\n\n"
@@ -486,7 +486,7 @@ class GamesCommands(app_commands.Group):
         except Exception:
             pass
         embed = discord.Embed(
-            title="🔀 Unscramble — Help",
+            title="🔀 Unscramble - Help",
             description=(
                 "Unscramble the scrambled word.\n\n**Rules**\n"
                 "• 3 guesses max\n• Each wrong guess reveals one correct letter\n"
@@ -506,7 +506,7 @@ class GamesCommands(app_commands.Group):
             return
         await wordle_nl.start_in_channel(channel_id=interaction.channel_id)
         embed = discord.Embed(
-            title="🧩 Woordle — Dagelijks",
+            title="🧩 Woordle - Dagelijks",
             description=(
                 "• 5-letter woorden\n"
                 "• 12 pogingen\n\n"
@@ -588,7 +588,7 @@ class GamesCommands(app_commands.Group):
             await interaction.response.send_message("Woordketting is niet beschikbaar.", ephemeral=True)
             return
         embed = discord.Embed(
-            title="🔤 Woordketting — Live Ronde",
+            title="🔤 Woordketting - Live Ronde",
             description="**Typ je eerste woord:**",
         )
         await interaction.response.send_message(embed=embed)
@@ -630,7 +630,7 @@ def _register_unfair_quiz_commands(bot: discord.Client, services: dict[str, Any]
     if not quiz:
         return
 
-    @bot.tree.command(name="unfairquiz", description="Start the Unfair Quiz — 30 tricky questions")
+    @bot.tree.command(name="unfairquiz", description="Start the Unfair Quiz - 10 tricky questions")
     async def cmd_unfairquiz(interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
         channel = interaction.channel
@@ -644,7 +644,7 @@ def _register_unfair_quiz_commands(bot: discord.Client, services: dict[str, Any]
         if isinstance(channel, discord.TextChannel):
             await quiz.stop(channel)
 
-    @bot.tree.command(name="oneerlijkquiz", description="Start de Oneerlijke Quiz — 30 strikvragen")
+    @bot.tree.command(name="oneerlijkquiz", description="Start de Oneerlijke Quiz - 10 strikvragen")
     async def cmd_oneerlijkquiz(interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
         channel = interaction.channel
@@ -665,7 +665,7 @@ def _register_dutch_grammar_quiz_commands(bot: discord.Client, services: dict[st
     if not bijvoeglijk and not de_of_het:
         return
 
-    @bot.tree.command(name="bijvoeglijk_start", description="Start de -e of geen -e quiz (50 vragen)")
+    @bot.tree.command(name="bijvoeglijk_start", description="Start de -e of geen -e quiz (10 vragen)")
     async def cmd_bijvoeglijk_start(interaction: discord.Interaction) -> None:
         if not bijvoeglijk:
             await interaction.response.send_message("Dit spel is niet beschikbaar.", ephemeral=True)
@@ -685,7 +685,7 @@ def _register_dutch_grammar_quiz_commands(bot: discord.Client, services: dict[st
         if isinstance(channel, discord.TextChannel):
             await bijvoeglijk.stop(channel)
 
-    @bot.tree.command(name="deofhet_start", description="Start de De of Het quiz (100 woorden)")
+    @bot.tree.command(name="deofhet_start", description="Start de De of Het quiz (10 woorden)")
     async def cmd_deofhet_start(interaction: discord.Interaction) -> None:
         if not de_of_het:
             await interaction.response.send_message("Dit spel is niet beschikbaar.", ephemeral=True)
@@ -707,7 +707,7 @@ def _register_dutch_grammar_quiz_commands(bot: discord.Client, services: dict[st
 
 
 def _register_standalone_commands(bot: discord.Client, services: dict[str, Any]) -> None:
-    """Standalone /balance and /bonen commands — work in any channel."""
+    """Standalone /balance and /bonen commands - work in any channel."""
     economy = services.get("economy")
     if not economy:
         return
@@ -744,7 +744,7 @@ def _register_standalone_commands(bot: discord.Client, services: dict[str, Any])
 
 
 def _register_challenge_commands(bot: discord.Client, services: dict[str, Any]) -> None:
-    """Manual trigger commands for the daily challenge — admin only."""
+    """Manual trigger commands for the daily challenge - admin only."""
     challenge = services.get("daily_challenge")
     if not challenge:
         return

@@ -54,7 +54,7 @@ from src.platforms.discord.bot import build_discord_bot
 from src.platforms.telegram.bot import build_telegram_bot
 
 
-# ---- Channel IDs (Discord — English server) ----
+# ---- Channel IDs (Discord - English server) ----
 WORD_CHAIN_CHANNEL_ID = 1481745881123520573
 WORDLE_CHANNEL_ID = 1481745735652474920
 UNSCRAMBLE_CHANNEL_ID = 1481745817021845607
@@ -63,7 +63,7 @@ GEO_LEARNING_CHANNEL_ID = 0
 GEO_FLAGS_CHANNEL_ID = 1481763185668395263
 GEO_LANGUAGE_CHANNEL_ID = 1481763326164865087
 
-# ---- Channel IDs (Discord — Dutch server) ----
+# ---- Channel IDs (Discord - Dutch server) ----
 DUTCH_WORDLE_CHANNEL_ID = 1482763022173995119
 DUTCH_UNSCRAMBLE_CHANNEL_ID = 1482763069238153419
 DUTCH_WORD_CHAIN_CHANNEL_ID = 1482763114842816765
@@ -281,32 +281,34 @@ async def main() -> None:
     )
 
     # --- Games: Unfair Quiz ---
-    unfair_quiz = UnfairQuizGame()
+    unfair_quiz = UnfairQuizGame(economy=economy_service)
     bijvoeglijk_e_quiz = GrammarChoiceQuizGame(
         title="Bijvoeglijk naamwoord: -e of geen -e",
         start_text=(
             "**Bijvoeglijk naamwoord Quiz**\n\n"
-            "50 vragen over **-e of geen -e**.\n"
+            "10 vragen over **-e of geen -e**.\n"
             "Regel: de-woorden altijd -e, het-woord met het ook -e, "
             "maar het-woord met een krijgt geen -e.\n"
             "Iedereen in dit kanaal kan meedoen."
         ),
-        done_text="Eindstand — Bijvoeglijk naamwoord Quiz",
-        help_footer="Gebruik /bijvoeglijk_start om opnieuw te starten.",
+        done_text="Bijvoeglijk naamwoord Quiz",
+        help_footer="Gebruik /bijvoeglijk_start om opnieuw te beginnen of druk op Opnieuw spelen.",
         questions=BIJVOEGLIJK_E_QUESTIONS,
         allowed_channel_ids={DUTCH_BIJVOEGLIJK_CHANNEL_ID},
+        economy=economy_service,
     )
     de_of_het_quiz = GrammarChoiceQuizGame(
         title="De of Het Quiz",
         start_text=(
             "**De of Het Quiz**\n\n"
-            "100 woorden. Kies steeds **de** of **het**.\n"
+            "10 woorden. Kies steeds **de** of **het**.\n"
             "Na elke vraag zie je meteen het juiste lidwoord met korte uitleg."
         ),
-        done_text="Eindstand — De of Het Quiz",
-        help_footer="Gebruik /deofhet_start om opnieuw te starten.",
+        done_text="De of Het Quiz",
+        help_footer="Gebruik /deofhet_start om opnieuw te beginnen of druk op Opnieuw spelen.",
         questions=DE_OF_HET_QUESTIONS,
         allowed_channel_ids={DUTCH_DE_OF_HET_CHANNEL_ID},
+        economy=economy_service,
     )
 
     # --- Games: Geo Learning ---
