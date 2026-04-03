@@ -659,6 +659,53 @@ def _register_unfair_quiz_commands(bot: discord.Client, services: dict[str, Any]
             await quiz.stop(channel)
 
 
+def _register_dutch_grammar_quiz_commands(bot: discord.Client, services: dict[str, Any]) -> None:
+    bijvoeglijk = services.get("bijvoeglijk_e_quiz")
+    de_of_het = services.get("de_of_het_quiz")
+    if not bijvoeglijk and not de_of_het:
+        return
+
+    @bot.tree.command(name="bijvoeglijk_start", description="Start de -e of geen -e quiz (50 vragen)")
+    async def cmd_bijvoeglijk_start(interaction: discord.Interaction) -> None:
+        if not bijvoeglijk:
+            await interaction.response.send_message("Dit spel is niet beschikbaar.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await bijvoeglijk.start(channel)
+
+    @bot.tree.command(name="bijvoeglijk_stop", description="Stop de -e of geen -e quiz")
+    async def cmd_bijvoeglijk_stop(interaction: discord.Interaction) -> None:
+        if not bijvoeglijk:
+            await interaction.response.send_message("Dit spel is niet beschikbaar.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await bijvoeglijk.stop(channel)
+
+    @bot.tree.command(name="deofhet_start", description="Start de De of Het quiz (100 woorden)")
+    async def cmd_deofhet_start(interaction: discord.Interaction) -> None:
+        if not de_of_het:
+            await interaction.response.send_message("Dit spel is niet beschikbaar.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await de_of_het.start(channel)
+
+    @bot.tree.command(name="deofhet_stop", description="Stop de De of Het quiz")
+    async def cmd_deofhet_stop(interaction: discord.Interaction) -> None:
+        if not de_of_het:
+            await interaction.response.send_message("Dit spel is niet beschikbaar.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            await de_of_het.stop(channel)
+
+
 def _register_standalone_commands(bot: discord.Client, services: dict[str, Any]) -> None:
     """Standalone /balance and /bonen commands — work in any channel."""
     economy = services.get("economy")
@@ -784,6 +831,8 @@ async def setup(bot: discord.Client) -> None:
     # Unfair Quiz
     if "unfairquiz" not in existing:
         _register_unfair_quiz_commands(bot, services)
+    if "bijvoeglijk_start" not in existing:
+        _register_dutch_grammar_quiz_commands(bot, services)
 
     # Standalone balance commands
     if "balance" not in existing:

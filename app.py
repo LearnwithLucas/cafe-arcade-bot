@@ -42,6 +42,11 @@ from src.games.dutch.wordle_nl import DutchWordleGame
 from src.games.dutch.unscramble_nl import DutchUnscrambleGame
 from src.games.dutch.word_chain_nl import DutchWordChainGame
 from src.games.dutch.niet_geen import NietGeenGame
+from src.games.dutch.grammar_choice_quiz import (
+    BIJVOEGLIJK_E_QUESTIONS,
+    DE_OF_HET_QUESTIONS,
+    GrammarChoiceQuizGame,
+)
 from src.games.unfair_quiz import UnfairQuizGame
 
 from src.jobs.daily_challenge import DailyChallengeJob
@@ -62,6 +67,8 @@ GEO_LANGUAGE_CHANNEL_ID = 1481763326164865087
 DUTCH_WORDLE_CHANNEL_ID = 1482763022173995119
 DUTCH_UNSCRAMBLE_CHANNEL_ID = 1482763069238153419
 DUTCH_WORD_CHAIN_CHANNEL_ID = 1482763114842816765
+DUTCH_BIJVOEGLIJK_CHANNEL_ID = 1489703986129801216
+DUTCH_DE_OF_HET_CHANNEL_ID = 1489704987859615895
 
 # ---- Assets ----
 WORDS_TXT_PATH = Path("src/assets/words_en.txt")
@@ -275,6 +282,32 @@ async def main() -> None:
 
     # --- Games: Unfair Quiz ---
     unfair_quiz = UnfairQuizGame()
+    bijvoeglijk_e_quiz = GrammarChoiceQuizGame(
+        title="Bijvoeglijk naamwoord: -e of geen -e",
+        start_text=(
+            "**Bijvoeglijk naamwoord Quiz**\n\n"
+            "50 vragen over **-e of geen -e**.\n"
+            "Regel: de-woorden altijd -e, het-woord met het ook -e, "
+            "maar het-woord met een krijgt geen -e.\n"
+            "Iedereen in dit kanaal kan meedoen."
+        ),
+        done_text="Eindstand — Bijvoeglijk naamwoord Quiz",
+        help_footer="Gebruik /bijvoeglijk_start om opnieuw te starten.",
+        questions=BIJVOEGLIJK_E_QUESTIONS,
+        allowed_channel_ids={DUTCH_BIJVOEGLIJK_CHANNEL_ID},
+    )
+    de_of_het_quiz = GrammarChoiceQuizGame(
+        title="De of Het Quiz",
+        start_text=(
+            "**De of Het Quiz**\n\n"
+            "100 woorden. Kies steeds **de** of **het**.\n"
+            "Na elke vraag zie je meteen het juiste lidwoord met korte uitleg."
+        ),
+        done_text="Eindstand — De of Het Quiz",
+        help_footer="Gebruik /deofhet_start om opnieuw te starten.",
+        questions=DE_OF_HET_QUESTIONS,
+        allowed_channel_ids={DUTCH_DE_OF_HET_CHANNEL_ID},
+    )
 
     # --- Games: Geo Learning ---
     geo_learning_bank = GeoLearningBank()
@@ -346,6 +379,8 @@ async def main() -> None:
         "word_chain_nl": word_chain_nl,
         "niet_geen": niet_geen_game,
         "unfair_quiz": unfair_quiz,
+        "bijvoeglijk_e_quiz": bijvoeglijk_e_quiz,
+        "de_of_het_quiz": de_of_het_quiz,
         # geo
         "geo_learning_bank": geo_learning_bank,
         "geo_learning": geo_learning,
