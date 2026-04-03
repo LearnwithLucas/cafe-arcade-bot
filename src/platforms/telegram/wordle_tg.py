@@ -4,6 +4,7 @@ import json
 import logging
 import random
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 from telegram import Update
@@ -88,17 +89,31 @@ class TelegramWordleGame:
     async def _new_session(self, chat_id: int) -> tuple[str, dict[str, Any]] | None:
         """End any current session and start a fresh one."""
         answer = self._pick_word()
+        puzzle_date = datetime.now(UTC).date().isoformat()
         await self._games_repo.end_active_in_location(
             platform=PLATFORM, location_id=str(chat_id), thread_id=None,
             game_key=self.key, status="ended"
         )
         session_id = f"{self.key}:{chat_id}:{int(time.time())}"
-        state = {"answer": answer, "players": {}, "solves": 0}
+        state = {"answer": answer, "players": {}, "solves": 0, "date": puzzle_date}
         await self._games_repo.upsert_active_session(
             session_id=session_id, platform=PLATFORM, location_id=str(chat_id),
             thread_id=None, game_key=self.key, state=state
         )
         return session_id, state
+
+    async def _get_or_create_session(self, chat_id: int) -> tuple[str, dict[str, Any]] | None:
+        result = await self._get_active_session(chat_id)
+        if result:
+            sess_id, state = result
+            if "date" not in state:
+                state["date"] = datetime.now(UTC).date().isoformat()
+                await self._games_repo.upsert_active_session(
+                    session_id=sess_id, platform=PLATFORM, location_id=str(chat_id),
+                    thread_id=None, game_key=self.key, state=state
+                )
+            return sess_id, state
+        return await self._new_session(chat_id)
 
     async def is_finished(self, chat_id: int, user_id: int) -> bool:
         result = await self._get_active_session(chat_id)
