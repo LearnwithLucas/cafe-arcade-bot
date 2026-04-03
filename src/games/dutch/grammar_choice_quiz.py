@@ -16,7 +16,8 @@ log = logging.getLogger("games.grammar_choice_quiz")
 ROUND_SECONDS = 20
 START_COUNTDOWN_SECONDS = 3
 MAX_QUESTIONS = 10
-BEANS_CORRECT = 3
+POINTS_CORRECT = 1
+BEANS_PER_POINT = 3
 
 
 @dataclass
@@ -42,7 +43,7 @@ class _GameState:
     done_text: str
     help_footer: str
     questions: list[GrammarQuestion]
-    scores: dict[str, int] = field(default_factory=dict)
+    points: dict[str, int] = field(default_factory=dict)
     names: dict[str, str] = field(default_factory=dict)
     started_at: float = field(default_factory=time.time)
     total_answers: int = 0
@@ -75,19 +76,8 @@ class _ChoiceView(discord.ui.View):
             self._gs.total_answers += 1
             if idx == self._rs.question.correct_index:
                 self._gs.correct_answers += 1
-                self._gs.scores[uid] = self._gs.scores.get(uid, 0) + BEANS_CORRECT
-                try:
-                    await self._game._economy.award_beans_discord(
-                        user_id=int(uid),
-                        amount=BEANS_CORRECT,
-                        reason="Grammar quiz correct",
-                        game_key="grammar_choice_quiz",
-                        display_name=interaction.user.display_name,
-                        guild_id=GUILD_NL,
-                    )
-                except Exception:
-                    log.exception("Grammar quiz bean award failed uid=%s", uid)
-                await interaction.response.send_message("✅ Correct.", ephemeral=True)
+                self._gs.points[uid] = self._gs.points.get(uid, 0) + POINTS_CORRECT
+                await interaction.response.send_message("✅ Correct. +1 punt.", ephemeral=True)
             else:
                 await interaction.response.send_message("❌ Niet correct.", ephemeral=True)
 
@@ -128,6 +118,7 @@ class GrammarChoiceQuizGame:
         questions: list[GrammarQuestion],
         allowed_channel_ids: set[int],
         economy: EconomyService,
+        guild_id: str = GUILD_NL,
     ) -> None:
         self._title = title
         self._start_text = start_text
@@ -135,6 +126,7 @@ class GrammarChoiceQuizGame:
         self._help_footer = help_footer
         self._questions = questions
         self._economy = economy
+        self._guild_id = guild_id
         self._allowed_channel_ids = {int(x) for x in allowed_channel_ids}
         self._active: dict[int, _GameState] = {}
         self._tasks: dict[int, asyncio.Task] = {}
@@ -176,6 +168,7 @@ class GrammarChoiceQuizGame:
         if not gs:
             await channel.send("Er is geen actief spel in dit kanaal.", delete_after=6)
             return
+        await self._award_final_beans(gs)
         await channel.send(embed=self._final_embed(gs), view=_RestartView(game=self))
 
     def _question_embed(self, rs: _RoundState, gs: _GameState, seconds_left: int) -> discord.Embed:
@@ -185,9 +178,9 @@ class GrammarChoiceQuizGame:
             title=f"{gs.title} - Vraag {rs.number}/{total}",
             description=f"**{rs.question.prompt}**\n\n{options}\n\n⏱️ {seconds_left}s",
         )
-        top = sorted(gs.scores.items(), key=lambda x: -x[1])[:5]
+        top = sorted(gs.points.items(), key=lambda x: -x[1])[:5]
         if top:
-            lead = "  ·  ".join(f"{gs.names.get(uid, uid)}: {score}" for uid, score in top)
+            lead = "  ·  ".join(f"{gs.names.get(uid, uid)}: {score} pt" for uid, score in top)
             embed.set_footer(text=f"{len(rs.answers)} antwoord(en)  |  {lead}")
         else:
             embed.set_footer(text=f"{len(rs.answers)} antwoord(en)")
@@ -199,9 +192,9 @@ class GrammarChoiceQuizGame:
         wrong = [f"{rs.names.get(uid, uid)} ({rs.question.options[choice]})" for uid, choice in rs.answers.items() if choice != rs.question.correct_index]
 
         lines: list[str] = []
-        for idx, (uid, score) in enumerate(sorted(gs.scores.items(), key=lambda x: -x[1])[:5], start=1):
-            lines.append(f"{idx}. {gs.names.get(uid, uid)} - {score} bonen")
-        board = "\n".join(lines) if lines else "Nog geen bonen."
+        for idx, (uid, score) in enumerate(sorted(gs.points.items(), key=lambda x: -x[1])[:5], start=1):
+            lines.append(f"{idx}. {gs.names.get(uid, uid)} - {score} punt(en)")
+        board = "\n".join(lines) if lines else "Nog geen punten."
 
         embed = discord.Embed(
             title=f"Antwoord: **{correct}**",
@@ -233,7 +226,7 @@ class GrammarChoiceQuizGame:
         else:
             verdict = "Blijf oefenen, je komt er."
 
-        top = sorted(gs.scores.items(), key=lambda x: -x[1])
+        top = sorted(gs.points.items(), key=lambda x: -x[1])
         if not top:
             desc = "Niemand heeft meegedaan."
         else:
@@ -241,8 +234,10 @@ class GrammarChoiceQuizGame:
             rows = []
             for i, (uid, score) in enumerate(top[:10]):
                 rank = medals[i] if i < 3 else f"{i + 1}."
-                rows.append(f"{rank} {gs.names.get(uid, uid)} - {score} bonen")
+                beans = score * BEANS_PER_POINT
+                rows.append(f"{rank} {gs.names.get(uid, uid)} - {score} punt(en) · {beans} bonen")
             desc = "\n".join(rows)
+        total_beans = gs.correct_answers * BEANS_PER_POINT
         embed = discord.Embed(
             title="Sessie beeindigd",
             description=(
@@ -250,7 +245,10 @@ class GrammarChoiceQuizGame:
                 f"Vragen beantwoord: **{questions_answered}**\n"
                 f"Goed: **{gs.correct_answers}** ({pct}%)\n"
                 f"Fout: **{wrong}**\n"
-                f"Tijd: **{time_str}**\n\n"
+                f"Tijd: **{time_str}**\n"
+                f"Punten per goed antwoord: **{POINTS_CORRECT}**\n"
+                f"Bonen per punt: **{BEANS_PER_POINT}**\n"
+                f"Totaal uit te keren bonen: **{total_beans}**\n\n"
                 f"{verdict}\n\n"
                 f"**Top spelers:**\n{desc}"
             ),
@@ -258,6 +256,24 @@ class GrammarChoiceQuizGame:
         )
         embed.set_footer(text=gs.help_footer)
         return embed
+
+
+    async def _award_final_beans(self, gs: _GameState) -> None:
+        for uid, points in gs.points.items():
+            beans = int(points) * BEANS_PER_POINT
+            if beans <= 0:
+                continue
+            try:
+                await self._economy.award_beans_discord(
+                    user_id=int(uid),
+                    amount=beans,
+                    reason="Grammar quiz final payout",
+                    game_key="grammar_choice_quiz",
+                    display_name=gs.names.get(uid),
+                    guild_id=self._guild_id,
+                )
+            except Exception:
+                log.exception("Grammar quiz final payout failed uid=%s guild=%s", uid, self._guild_id)
 
     async def _run(self, channel: discord.TextChannel, gs: _GameState) -> None:
         try:
@@ -283,6 +299,7 @@ class GrammarChoiceQuizGame:
                 await asyncio.sleep(3)
 
             if channel.id in self._active:
+                await self._award_final_beans(gs)
                 await channel.send(embed=self._final_embed(gs), view=_RestartView(game=self))
         except asyncio.CancelledError:
             raise
