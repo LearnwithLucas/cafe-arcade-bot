@@ -8,10 +8,15 @@ from dataclasses import dataclass, field
 
 import discord
 
+from src.db.repo.economy_repo import GUILD_NL
+from src.services.economy_service import EconomyService
+
 log = logging.getLogger("games.unfair_quiz")
 
 ROUND_SECONDS = 20
-BEANS_CORRECT = 5
+START_COUNTDOWN_SECONDS = 3
+MAX_QUESTIONS = 10
+BEANS_CORRECT = 3
 
 
 # =======================================================
@@ -50,7 +55,7 @@ EN_QUESTIONS: list[tuple[str, list[str], int, str]] = [
         "Which planet is closest to the sun?",
         ["Venus", "Earth", "Mars", "Mercury"],
         3,
-        "D. Mercury. Not Venus — Mercury.",
+        "D. Mercury. Not Venus - Mercury.",
     ),
     (
         "How many legs does a spider have?",
@@ -104,7 +109,7 @@ EN_QUESTIONS: list[tuple[str, list[str], int, str]] = [
         "What is the fastest land animal?",
         ["Lion", "Horse", "Falcon", "Cheetah"],
         3,
-        "D. Cheetah. The falcon is faster but it flies — land animal is cheetah.",
+        "D. Cheetah. The falcon is faster but it flies - land animal is cheetah.",
     ),
     (
         "Which ocean is the largest?",
@@ -128,7 +133,7 @@ EN_QUESTIONS: list[tuple[str, list[str], int, str]] = [
         "What language do they speak in Brazil?",
         ["Spanish", "English", "French", "Portuguese"],
         3,
-        "D. Portuguese. Not Spanish — Brazil was colonized by Portugal.",
+        "D. Portuguese. Not Spanish - Brazil was colonized by Portugal.",
     ),
     (
         "What is the smallest planet in our solar system?",
@@ -237,7 +242,7 @@ NL_QUESTIONS: list[tuple[str, list[str], int, str]] = [
         "Welke planeet staat het dichtst bij de zon?",
         ["Venus", "Aarde", "Mars", "Mercurius"],
         3,
-        "D. Mercurius. Niet Venus — Mercurius.",
+        "D. Mercurius. Niet Venus - Mercurius.",
     ),
     (
         "Hoeveel poten heeft een spin?",
@@ -291,7 +296,7 @@ NL_QUESTIONS: list[tuple[str, list[str], int, str]] = [
         "Wat is het snelste landdier?",
         ["Leeuw", "Paard", "Valk", "Cheetah"],
         3,
-        "D. Cheetah. De valk vliegt — het gaat om landdieren.",
+        "D. Cheetah. De valk vliegt - het gaat om landdieren.",
     ),
     (
         "Welke oceaan is de grootste?",
@@ -315,7 +320,7 @@ NL_QUESTIONS: list[tuple[str, list[str], int, str]] = [
         "Welke taal spreken ze in Brazilië?",
         ["Spaans", "Engels", "Frans", "Portugees"],
         3,
-        "D. Portugees. Niet Spaans — Brazilië is gekoloniseerd door Portugal.",
+        "D. Portugees. Niet Spaans - Brazilië is gekoloniseerd door Portugal.",
     ),
     (
         "Wat is de kleinste planeet in ons zonnestelsel?",
@@ -423,6 +428,9 @@ class _GameState:
     scores: dict[str, int] = field(default_factory=dict)
     names: dict[str, str] = field(default_factory=dict)
     used_indices: set[int] = field(default_factory=set)
+    started_at: float = field(default_factory=time.time)
+    total_answers: int = 0
+    correct_answers: int = 0
 
 
 # =======================================================
@@ -434,12 +442,12 @@ def _question_embed(rs: _RoundState, gs: _GameState, seconds_left: int) -> disco
     bar = "🟦" * filled + "⬜" * (10 - filled)
 
     options_text = "\n".join(
-        f"**{LABELS[i]}** — {opt}" for i, opt in enumerate(rs.options)
+        f"**{LABELS[i]}** - {opt}" for i, opt in enumerate(rs.options)
     )
     top = sorted(gs.scores.items(), key=lambda x: -x[1])[:3]
     score_str = "  ·  ".join(f"{gs.names.get(u, u)}: {s}" for u, s in top) if top else ""
 
-    title = f"{'Oneerlijke Quiz' if rs.is_nl else 'Unfair Quiz'} — {'Vraag' if rs.is_nl else 'Question'} {rs.question_number}/30"
+    title = f"{'Oneerlijke Quiz' if rs.is_nl else 'Unfair Quiz'} - {'Vraag' if rs.is_nl else 'Question'} {rs.question_number}/{MAX_QUESTIONS}"
     embed = discord.Embed(
         title=title,
         description=f"**{rs.question}**\n\n{options_text}\n\n{bar} {seconds_left}s",
@@ -464,7 +472,7 @@ def _result_embed(rs: _RoundState, gs: _GameState) -> discord.Embed:
 
     top = sorted(gs.scores.items(), key=lambda x: -x[1])[:5]
     score_lines = "\n".join(
-        f"{i+1}. {gs.names.get(u, u)} — {s} pt"
+        f"{i+1}. {gs.names.get(u, u)} - {s} bonen"
         for i, (u, s) in enumerate(top)
     ) if top else ("Nog geen punten" if rs.is_nl else "No points yet")
 
@@ -478,7 +486,7 @@ def _result_embed(rs: _RoundState, gs: _GameState) -> discord.Embed:
         next_str = "Next question in 4 seconds..."
 
     embed = discord.Embed(
-        title=f"{'Antwoord' if rs.is_nl else 'Answer'}: **{correct_label} — {correct_option}**",
+        title=f"{'Antwoord' if rs.is_nl else 'Answer'}: **{correct_label} - {correct_option}**",
         description=(
             f"{rs.explanation}\n\n"
             f"**{'Goed' if rs.is_nl else 'Correct'}:** {right_str}\n"
@@ -492,6 +500,21 @@ def _result_embed(rs: _RoundState, gs: _GameState) -> discord.Embed:
 
 
 def _final_embed(gs: _GameState) -> discord.Embed:
+    elapsed = int(time.time() - gs.started_at)
+    mins, secs = divmod(elapsed, 60)
+    time_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+    wrong_answers = max(0, gs.total_answers - gs.correct_answers)
+    pct = int(gs.correct_answers / gs.total_answers * 100) if gs.total_answers else 0
+
+    if pct == 100:
+        verdict = "Perfecte score!" if gs.is_nl else "Perfect score!"
+    elif pct >= 80:
+        verdict = "Heel goed gedaan." if gs.is_nl else "Great job."
+    elif pct >= 60:
+        verdict = "Goed bezig." if gs.is_nl else "Nice work."
+    else:
+        verdict = "Blijf oefenen, je komt er." if gs.is_nl else "Keep practicing, you will get there."
+
     top = sorted(gs.scores.items(), key=lambda x: -x[1])
     if not top:
         desc = "Niemand heeft meegedaan." if gs.is_nl else "Nobody played."
@@ -500,14 +523,42 @@ def _final_embed(gs: _GameState) -> discord.Embed:
         medals = ["🥇", "🥈", "🥉"]
         for i, (uid, score) in enumerate(top[:10]):
             medal = medals[i] if i < 3 else f"{i+1}."
-            lines.append(f"{medal} {gs.names.get(uid, uid)} — {score} pt")
+            lines.append(f"{medal} {gs.names.get(uid, uid)} - {score} bonen")
         desc = "\n".join(lines)
 
-    title = "Eindstand — Oneerlijke Quiz" if gs.is_nl else "Final Scores — Unfair Quiz"
-    footer = "Gebruik /oneerlijkquiz om opnieuw te spelen." if gs.is_nl else "Use /unfairquiz to play again."
-    embed = discord.Embed(title=title, description=desc, color=discord.Color.gold())
-    embed.set_footer(text=footer)
+    session_name = "Oneerlijke Quiz" if gs.is_nl else "Unfair Quiz"
+    restart_tip = "Gebruik /oneerlijkquiz om opnieuw te beginnen." if gs.is_nl else "Use /unfairquiz to start again."
+    embed = discord.Embed(
+        title="Sessie beeindigd" if gs.is_nl else "Session ended",
+        description=(
+            f"**{session_name}**\n\n"
+            f"Vragen beantwoord: **{gs.round_number}**\n"
+            f"Goed: **{gs.correct_answers}** ({pct}%)\n"
+            f"Fout: **{wrong_answers}**\n"
+            f"Tijd: **{time_str}**\n\n"
+            f"{verdict}\n\n"
+            f"**Top spelers:**\n{desc}"
+        ),
+        color=discord.Color.gold(),
+    )
+    embed.set_footer(text=restart_tip)
     return embed
+
+
+class _RestartView(discord.ui.View):
+    def __init__(self, *, game: "UnfairQuizGame", is_nl: bool) -> None:
+        super().__init__(timeout=300)
+        self._game = game
+        self._is_nl = is_nl
+
+    @discord.ui.button(label="Opnieuw spelen", style=discord.ButtonStyle.primary, custom_id="uq:restart")
+    async def restart(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message("Deze knop werkt alleen in een tekstkanaal.", ephemeral=True)
+            return
+        await interaction.response.send_message("Nieuwe ronde gestart.", ephemeral=True)
+        await self._game.start(channel, is_nl=self._is_nl)
 
 
 # =======================================================
@@ -544,9 +595,9 @@ class QuizView(discord.ui.View):
             is_correct = index == self._rs.correct_index
             chosen_label = LABELS[index]
             if is_correct:
-                reply = f"✅ {chosen_label} — {'Goed!' if self._rs.is_nl else 'Correct!'}"
+                reply = f"✅ {chosen_label} - {'Goed!' if self._rs.is_nl else 'Correct!'}"
             else:
-                reply = f"❌ {chosen_label} — {'Helaas.' if self._rs.is_nl else 'Wrong.'}"
+                reply = f"❌ {chosen_label} - {'Helaas.' if self._rs.is_nl else 'Wrong.'}"
             await interaction.response.send_message(reply, ephemeral=True)
         return callback
 
@@ -570,7 +621,8 @@ class _DisabledView(discord.ui.View):
 # =======================================================
 
 class UnfairQuizGame:
-    def __init__(self) -> None:
+    def __init__(self, *, economy: EconomyService) -> None:
+        self._economy = economy
         self._active: dict[int, _GameState] = {}
         self._tasks: dict[int, asyncio.Task] = {}
 
@@ -586,15 +638,22 @@ class UnfairQuizGame:
         if is_nl:
             await channel.send(
                 "**De Oneerlijke Quiz**\n\n"
-                "30 vragen. De antwoorden zijn correct — maar de vragen zijn ontworpen om je te laten twijfelen.\n"
+                "10 vragen. De antwoorden zijn correct, maar de vragen zijn ontworpen om je te laten twijfelen.\n"
                 "Iedereen kan meedoen. Druk op de knop als je het antwoord weet."
             )
         else:
             await channel.send(
                 "**The Unfair Quiz**\n\n"
-                "30 questions. The answers are correct — but the questions are designed to trick you.\n"
+                "10 questions. The answers are correct, but the questions are designed to trick you.\n"
                 "Everyone can play. Press a button when you know the answer."
             )
+
+        countdown_msg = await channel.send(f"Start in **{START_COUNTDOWN_SECONDS}**...")
+        for left in range(START_COUNTDOWN_SECONDS - 1, 0, -1):
+            await asyncio.sleep(1)
+            await countdown_msg.edit(content=f"Start in **{left}**...")
+        await asyncio.sleep(1)
+        await countdown_msg.edit(content="Go!")
 
         task = asyncio.create_task(self._run(channel, state))
         self._tasks[channel.id] = task
@@ -605,15 +664,15 @@ class UnfairQuizGame:
         if task:
             task.cancel()
         if not state:
-            msg = "Er is geen actieve quiz." if False else "No active quiz."
+            msg = "Er is geen actieve quiz. / No active quiz."
             await channel.send(msg, delete_after=6)
             return
-        await channel.send(embed=_final_embed(state))
+        await channel.send(embed=_final_embed(state), view=_RestartView(game=self, is_nl=state.is_nl))
 
     async def _run(self, channel: discord.TextChannel, state: _GameState) -> None:
         questions = NL_QUESTIONS if state.is_nl else EN_QUESTIONS
         try:
-            indices = random.sample(range(len(questions)), k=min(30, len(questions)))
+            indices = random.sample(range(len(questions)), k=min(MAX_QUESTIONS, len(questions)))
 
             for q_num, idx in enumerate(indices, start=1):
                 if channel.id not in self._active:
@@ -649,7 +708,7 @@ class UnfairQuizGame:
 
                 await asyncio.sleep(5)
 
-                # Lock buttons — green = correct, grey = wrong
+                # Lock buttons - green = correct, grey = wrong
                 try:
                     await msg.edit(
                         embed=_question_embed(rs, state, 0),
@@ -660,9 +719,22 @@ class UnfairQuizGame:
 
                 # Score
                 for uid, chosen in rs.answers.items():
+                    state.total_answers += 1
                     state.scores.setdefault(uid, 0)
                     if chosen == rs.correct_index:
+                        state.correct_answers += 1
                         state.scores[uid] += BEANS_CORRECT
+                        try:
+                            await self._economy.award_beans_discord(
+                                user_id=int(uid),
+                                amount=BEANS_CORRECT,
+                                reason="Unfair Quiz correct",
+                                game_key="unfair_quiz",
+                                display_name=state.names.get(uid),
+                                guild_id=GUILD_NL,
+                            )
+                        except Exception:
+                            log.exception("UnfairQuiz: bean award failed uid=%s", uid)
 
                 await channel.send(embed=_result_embed(rs, state))
                 await asyncio.sleep(4)
@@ -670,7 +742,7 @@ class UnfairQuizGame:
             # Game over
             self._active.pop(channel.id, None)
             self._tasks.pop(channel.id, None)
-            await channel.send(embed=_final_embed(state))
+            await channel.send(embed=_final_embed(state), view=_RestartView(game=self, is_nl=state.is_nl))
 
         except asyncio.CancelledError:
             pass
