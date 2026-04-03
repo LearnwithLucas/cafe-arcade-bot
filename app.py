@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
 
 from src.config.settings import Settings
@@ -45,6 +46,7 @@ from src.games.unfair_quiz import UnfairQuizGame
 
 from src.jobs.daily_challenge import DailyChallengeJob
 from src.platforms.discord.bot import build_discord_bot
+from src.platforms.telegram.bot import build_telegram_bot
 
 
 # ---- Channel IDs (Discord — English server) ----
@@ -362,12 +364,23 @@ async def main() -> None:
 
     # --- Discord bot ---
     discord_bot = build_discord_bot(settings=settings, services=services)
+    telegram_bot = None
+    telegram_task = None
+    if settings.telegram_token:
+        telegram_bot = build_telegram_bot(services=services, token=settings.telegram_token)
+        telegram_task = asyncio.create_task(telegram_bot.run())
 
     daily_challenge.start(discord_bot)
 
     try:
         await discord_bot.start(settings.discord_token)
     finally:
+        if telegram_task:
+            telegram_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await telegram_task
+        if telegram_bot:
+            await telegram_bot.stop()
         await db.close()
 
 
