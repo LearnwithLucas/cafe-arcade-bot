@@ -9,6 +9,7 @@ from src.config.settings import Settings
 from src.platforms.discord.commands import setup as setup_commands
 from src.platforms.discord.events import setup as setup_events
 from src.services.hub_service import HubPublisher, StartHereView, BeginHierView
+from src.services.instruction_publisher import DiscordInstructionPublisher
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,12 @@ class ArcadeDiscordBot(discord.Client):
             await hub.publish_dutch()
         except Exception:
             logger.exception("Hub: failed to publish Dutch hub")
+
+        instructions = DiscordInstructionPublisher(bot=self)
+        try:
+            await instructions.publish_all()
+        except Exception:
+            logger.exception("Instructions: failed to publish Discord instructions")
 
 
 def build_discord_bot(*, settings: Settings, services: dict[str, Any]) -> ArcadeDiscordBot:
