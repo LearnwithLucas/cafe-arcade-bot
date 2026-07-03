@@ -18,16 +18,14 @@ from telegram.ext import (
 from src.platforms.telegram.wordle_tg import TelegramWordleGame
 from src.platforms.telegram.unscramble_tg import TelegramUnscrambleGame
 from src.platforms.telegram.word_chain_tg import TelegramWordChainGame
+from src.services.instruction_publisher import TelegramInstructionPublisher
 
 log = logging.getLogger("telegram.bot")
 
 AFK_TIMEOUT_SECONDS = 3 * 60
 
 
-def _allowed_chat_ids() -> set[int]:
-    raw = os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "").strip()
-    if not raw:
-        return set()
+def _parse_id_list(raw: str) -> set[int]:
     result = set()
     for part in raw.split(","):
         try:
@@ -35,19 +33,27 @@ def _allowed_chat_ids() -> set[int]:
         except ValueError:
             pass
     return result
+
+
+def _allowed_chat_ids() -> set[int]:
+    raw = os.getenv("TELEGRAM_ALLOWED_CHAT_IDS", "").strip()
+    if not raw:
+        return set()
+    return _parse_id_list(raw)
+
+
+def _instruction_chat_ids() -> set[int]:
+    raw = os.getenv("TELEGRAM_INSTRUCTION_CHAT_IDS", "").strip()
+    if raw:
+        return _parse_id_list(raw)
+    return _allowed_chat_ids()
 
 
 def _admin_user_ids() -> set[int]:
     raw = os.getenv("TG_ADMIN_USER_IDS", "").strip()
     if not raw:
         return set()
-    result = set()
-    for part in raw.split(","):
-        try:
-            result.add(int(part.strip()))
-        except ValueError:
-            pass
-    return result
+    return _parse_id_list(raw)
 
 
 def _discovery_mode() -> bool:
@@ -401,6 +407,10 @@ class TelegramBot:
         log.info("Telegram bot starting (discovery_mode=%s)", _discovery_mode())
         async with app:
             await app.start()
+            await TelegramInstructionPublisher(
+                bot=app.bot,
+                chat_ids=_instruction_chat_ids(),
+            ).publish_all()
             await app.updater.start_polling(drop_pending_updates=True)
             log.info("Telegram bot running as @JerrytheDuckBot")
             await asyncio.Event().wait()
