@@ -8,6 +8,7 @@ import discord
 from src.config.settings import Settings
 from src.platforms.discord.commands import setup as setup_commands
 from src.platforms.discord.events import setup as setup_events
+from src.platforms.discord.play_menu import register_play_command
 from src.services.hub_service import HubPublisher, StartHereView, BeginHierView
 from src.services.instruction_publisher import DiscordInstructionPublisher
 
@@ -27,6 +28,8 @@ class ArcadeDiscordBot(discord.Client):
     async def setup_hook(self) -> None:
         await setup_commands(self)
         await setup_events(self)
+        if "play" not in {command.name for command in self.tree.get_commands()}:
+            register_play_command(self, self.services)
 
         # Register persistent views so buttons survive restarts
         self.add_view(StartHereView())
