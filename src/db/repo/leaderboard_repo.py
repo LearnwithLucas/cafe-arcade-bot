@@ -131,3 +131,60 @@ class LeaderboardRepository:
                 }
             )
         return out
+
+    async def get_per_game_earned_leaderboards(
+        self,
+        *,
+        game_keys: list[str],
+        limit_per_game: int = 3,
+        guild_id: str = GUILD_EN,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """
+        Returns top players per game, ranked by all-time beans earned in that game.
+
+        Shape:
+          {
+            "wordle": [
+              {"discord_user_id": "123", "display_name": "Lucas", "total_beans": 42}
+            ]
+          }
+        """
+        if not game_keys:
+            return {}
+
+        limit_per_game = max(1, min(10, int(limit_per_game)))
+        placeholders = ",".join("?" for _ in game_keys)
+
+        rows = await self._db.fetchall(
+            f"""
+            SELECT
+                bt.game_key AS game_key,
+                u.discord_user_id AS discord_user_id,
+                COALESCE(u.display_name, u.discord_user_id, 'Unknown') AS display_name,
+                SUM(CASE WHEN bt.delta > 0 THEN bt.delta ELSE 0 END) AS total_beans
+            FROM bean_transactions bt
+            JOIN users u ON u.id = bt.user_id
+            WHERE bt.game_key IN ({placeholders})
+              AND bt.guild_id = ?
+              AND u.discord_user_id IS NOT NULL
+            GROUP BY bt.game_key, u.discord_user_id
+            HAVING total_beans > 0
+            ORDER BY bt.game_key ASC, total_beans DESC, u.id ASC
+            """,
+            (*game_keys, guild_id),
+        )
+
+        out: dict[str, list[dict[str, Any]]] = {key: [] for key in game_keys}
+        for r in rows:
+            key = str(r["game_key"])
+            bucket = out.setdefault(key, [])
+            if len(bucket) >= limit_per_game:
+                continue
+            bucket.append(
+                {
+                    "discord_user_id": str(r["discord_user_id"]),
+                    "display_name": str(r["display_name"]),
+                    "total_beans": int(r["total_beans"] or 0),
+                }
+            )
+        return out
