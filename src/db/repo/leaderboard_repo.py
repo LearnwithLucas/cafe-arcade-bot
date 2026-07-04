@@ -23,9 +23,33 @@ class LeaderboardRepository:
     # -------------------------
 
     async def get_global_leaderboard(
-        self, *, limit: int = 10, guild_id: str = GUILD_EN
+        self, *, limit: int = 10, guild_id: str | None = GUILD_EN
     ) -> list[LeaderboardRow]:
         limit = max(1, min(50, int(limit)))
+
+        if guild_id is None:
+            rows = await self._db.fetchall(
+                """
+                SELECT
+                    u.id AS user_id,
+                    COALESCE(u.display_name, u.discord_user_id, u.telegram_user_id, 'Unknown') AS display_name,
+                    SUM(a.balance) AS balance
+                FROM bean_accounts a
+                JOIN users u ON u.id = a.user_id
+                GROUP BY u.id
+                ORDER BY balance DESC, u.id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            return [
+                LeaderboardRow(
+                    user_id=int(r["user_id"]),
+                    display_name=str(r["display_name"]),
+                    balance=int(r["balance"] or 0),
+                )
+                for r in rows
+            ]
 
         rows = await self._db.fetchall(
             """
@@ -89,7 +113,7 @@ class LeaderboardRepository:
         since_ts_utc: str,
         english_game_keys: list[str],
         limit: int = 10,
-        guild_id: str = GUILD_EN,
+        guild_id: str | None = GUILD_EN,
     ) -> list[dict[str, Any]]:
         """
         Returns rows like:
@@ -103,6 +127,12 @@ class LeaderboardRepository:
             return []
 
         placeholders = ",".join("?" for _ in english_game_keys)
+        guild_filter = "AND bt.guild_id = ?" if guild_id is not None else ""
+        params: tuple[Any, ...]
+        if guild_id is None:
+            params = (since_ts_utc, *english_game_keys, limit)
+        else:
+            params = (since_ts_utc, *english_game_keys, guild_id, limit)
 
         rows = await self._db.fetchall(
             f"""
@@ -113,13 +143,13 @@ class LeaderboardRepository:
             JOIN users u ON u.id = bt.user_id
             WHERE bt.created_at >= ?
               AND bt.game_key IN ({placeholders})
-              AND bt.guild_id = ?
+              {guild_filter}
               AND u.discord_user_id IS NOT NULL
             GROUP BY u.discord_user_id
             ORDER BY total_beans DESC
             LIMIT ?
             """,
-            (since_ts_utc, *english_game_keys, guild_id, limit),
+            params,
         )
 
         out: list[dict[str, Any]] = []
@@ -137,7 +167,7 @@ class LeaderboardRepository:
         *,
         game_keys: list[str],
         limit_per_game: int = 3,
-        guild_id: str = GUILD_EN,
+        guild_id: str | None = GUILD_EN,
     ) -> dict[str, list[dict[str, Any]]]:
         """
         Returns top players per game, ranked by all-time beans earned in that game.
@@ -154,6 +184,8 @@ class LeaderboardRepository:
 
         limit_per_game = max(1, min(10, int(limit_per_game)))
         placeholders = ",".join("?" for _ in game_keys)
+        guild_filter = "AND bt.guild_id = ?" if guild_id is not None else ""
+        params = (*game_keys, guild_id) if guild_id is not None else tuple(game_keys)
 
         rows = await self._db.fetchall(
             f"""
@@ -165,13 +197,13 @@ class LeaderboardRepository:
             FROM bean_transactions bt
             JOIN users u ON u.id = bt.user_id
             WHERE bt.game_key IN ({placeholders})
-              AND bt.guild_id = ?
+              {guild_filter}
               AND u.discord_user_id IS NOT NULL
             GROUP BY bt.game_key, u.discord_user_id
             HAVING total_beans > 0
             ORDER BY bt.game_key ASC, total_beans DESC, u.id ASC
             """,
-            (*game_keys, guild_id),
+            params,
         )
 
         out: dict[str, list[dict[str, Any]]] = {key: [] for key in game_keys}

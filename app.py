@@ -26,6 +26,21 @@ from src.services.leaderboard_service import LeaderboardService
 from src.services.leaderboard_publisher import LeaderboardPublisher, LeaderboardConfig
 from src.services.rewards_service import RewardsService
 from src.services.wordlist import WordList
+from src.config.channels import (
+    DUTCH_BIJVOEGLIJK_CHANNEL_ID,
+    DUTCH_DE_OF_HET_CHANNEL_ID,
+    DUTCH_NIET_GEEN_CHANNEL_ID,
+    DUTCH_UNSCRAMBLE_CHANNEL_ID,
+    DUTCH_WORDLE_CHANNEL_ID,
+    DUTCH_WORD_CHAIN_CHANNEL_ID,
+    GEO_FLAGS_CHANNEL_ID,
+    GEO_LANGUAGE_CHANNEL_ID,
+    GEO_LEARNING_CHANNEL_ID,
+    LEADERBOARD_CHANNEL_ID,
+    UNSCRAMBLE_CHANNEL_ID,
+    WORDLE_CHANNEL_ID,
+    WORD_CHAIN_CHANNEL_ID,
+)
 
 from src.games.english.word_chain import WordChainGame
 from src.games.english.wordle import WordleGame
@@ -52,23 +67,6 @@ from src.games.unfair_quiz import UnfairQuizGame
 from src.jobs.daily_challenge import DailyChallengeJob
 from src.platforms.discord.bot import build_discord_bot
 from src.platforms.telegram.bot import build_telegram_bot
-
-
-# ---- Channel IDs (Discord - English server) ----
-WORD_CHAIN_CHANNEL_ID = 1481745881123520573
-WORDLE_CHANNEL_ID = 1481745735652474920
-UNSCRAMBLE_CHANNEL_ID = 1481745817021845607
-LEADERBOARD_CHANNEL_ID = 1481746468737126564
-GEO_LEARNING_CHANNEL_ID = 0
-GEO_FLAGS_CHANNEL_ID = 1481763185668395263
-GEO_LANGUAGE_CHANNEL_ID = 1481763326164865087
-
-# ---- Channel IDs (Discord - Dutch server) ----
-DUTCH_WORDLE_CHANNEL_ID = 1482763022173995119
-DUTCH_UNSCRAMBLE_CHANNEL_ID = 1482763069238153419
-DUTCH_WORD_CHAIN_CHANNEL_ID = 1482763114842816765
-DUTCH_BIJVOEGLIJK_CHANNEL_ID = 1489703986129801216
-DUTCH_DE_OF_HET_CHANNEL_ID = 1489704987859615895
 
 # ---- Assets ----
 WORDS_TXT_PATH = Path("src/assets/words_en.txt")
@@ -101,17 +99,53 @@ async def main() -> None:
     games_repo = GamesRepository(db)
     shop_repo = ShopRepository(db)
 
-    # --- English leaderboard publisher ---
-    english_game_keys = ["word_chain", "wordle", "unscramble"]
-    dutch_game_keys = ["word_chain_nl", "wordle_nl", "unscramble_nl", "niet_geen", "unfair_quiz_nl"]
+    # --- Games leaderboard publisher ---
+    games_leaderboard_keys = [
+        "word_chain",
+        "wordle",
+        "unscramble",
+        "geo_flags",
+        "geo_language",
+        "word_chain_nl",
+        "wordle_nl",
+        "unscramble_nl",
+        "niet_geen",
+        "grammar_choice_quiz",
+        "unfair_quiz",
+    ]
+    dutch_game_keys = ["word_chain_nl", "wordle_nl", "unscramble_nl", "niet_geen", "grammar_choice_quiz", "unfair_quiz"]
+    games_leaderboard_labels = {
+        "word_chain": "Word Chain",
+        "wordle": "Wordle",
+        "unscramble": "Unscramble",
+        "geo_flags": "Geo Flags",
+        "geo_language": "Geo Language",
+        "word_chain_nl": "Woordketting",
+        "wordle_nl": "Woordle",
+        "unscramble_nl": "Ontwar het Woord",
+        "niet_geen": "Niet vs Geen",
+        "grammar_choice_quiz": "Grammatica Quiz",
+        "unfair_quiz": "Oneerlijke Quiz",
+    }
+    dutch_game_labels = {
+        "word_chain_nl": "Woordketting",
+        "wordle_nl": "Woordle",
+        "unscramble_nl": "Ontwar het Woord",
+        "niet_geen": "Niet vs Geen",
+        "grammar_choice_quiz": "Grammatica Quiz",
+        "unfair_quiz": "Oneerlijke Quiz",
+    }
 
     leaderboard_publisher = LeaderboardPublisher(
         config=LeaderboardConfig(
             platform="discord",
             channel_id=LEADERBOARD_CHANNEL_ID,
-            english_game_keys=english_game_keys,
+            english_game_keys=games_leaderboard_keys,
+            game_labels=games_leaderboard_labels,
             limit=10,
             debounce_seconds=10.0,
+            board_key="games_leaderboard_v1",
+            include_all_guilds=True,
         ),
         leaderboard_repo=leaderboard_repo,
         posts_repo=leaderboard_posts_repo,
@@ -125,6 +159,7 @@ async def main() -> None:
                 platform="discord",
                 channel_id=int(settings.dutch_channel_progress),
                 english_game_keys=dutch_game_keys,
+                game_labels=dutch_game_labels,
                 limit=10,
                 debounce_seconds=10.0,
                 board_key="dutch_dropdown_v2",
@@ -277,7 +312,7 @@ async def main() -> None:
         users_repo=users_repo,
         economy=economy_service,
         rewards=rewards,
-        allowed_channel_ids={1487175077702275273},
+        allowed_channel_ids={DUTCH_NIET_GEEN_CHANNEL_ID},
     )
 
     # --- Games: Unfair Quiz ---
