@@ -8,9 +8,9 @@ from typing import Any, Optional
 
 import discord
 
-from src.db.repo.leaderboard_repo import LeaderboardRepository
-from src.db.repo.leaderboard_posts_repo import LeaderboardPostsRepository
 from src.db.repo.economy_repo import GUILD_EN, GUILD_NL
+from src.db.repo.leaderboard_posts_repo import LeaderboardPostsRepository
+from src.db.repo.leaderboard_repo import LeaderboardRepository
 
 logger = logging.getLogger(__name__)
 
@@ -23,19 +23,19 @@ class LeaderboardConfig:
     game_labels: dict[str, str] = field(default_factory=dict)
     limit: int = 10
     debounce_seconds: float = 10.0
-    board_key: str = "english_dropdown_v1"  # must be unique per publisher instance
+    board_key: str = "english_dropdown_v1"
+    include_all_guilds: bool = False
 
 
 class LeaderboardPublisher:
     """
-    One-message leaderboard with dropdown:
-      - Today (default)
+    One-message leaderboard with tabs:
+      - Today
       - This Week
       - By Game
-      - All Time (global beans balance)
+      - All Time
 
-    board_key must be unique per channel so Dutch and English don't share a message ID.
-    guild_id is derived from board_key: dutch_* boards are nl, everything else is en.
+    board_key must be unique per channel so boards do not share a stored message ID.
     """
 
     def __init__(
@@ -55,11 +55,16 @@ class LeaderboardPublisher:
         self._pending_task: Optional[asyncio.Task] = None
         self._scheduled_at: Optional[float] = None
 
-    def _guild_id(self) -> str:
+    def _guild_id(self) -> str | None:
+        if self._config.include_all_guilds:
+            return None
         return GUILD_NL if self._config.board_key.startswith("dutch_") else GUILD_EN
 
     def _is_dutch(self) -> bool:
         return self._guild_id() == GUILD_NL
+
+    def _is_combined(self) -> bool:
+        return self._config.include_all_guilds
 
     def set_bot(self, bot: discord.Client) -> None:
         self._bot = bot
@@ -67,7 +72,7 @@ class LeaderboardPublisher:
             "LeaderboardPublisher attached to bot. channel_id=%s board_key=%s guild_id=%s",
             self._config.channel_id,
             self._config.board_key,
-            self._guild_id(),
+            self._guild_id() or "all",
         )
         try:
             bot.add_view(self.build_persistent_view())
@@ -139,9 +144,7 @@ class LeaderboardPublisher:
                 try:
                     channel = await self._bot.fetch_channel(self._config.channel_id)
                 except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-                    logger.exception(
-                        "Failed to fetch leaderboard channel channel_id=%s", self._config.channel_id
-                    )
+                    logger.exception("Failed to fetch leaderboard channel channel_id=%s", self._config.channel_id)
                     return
 
             if not isinstance(channel, (discord.TextChannel, discord.Thread)):
@@ -159,9 +162,7 @@ class LeaderboardPublisher:
                     self._config.board_key,
                 )
             else:
-                logger.warning(
-                    "Leaderboard message update failed board_key=%s", self._config.board_key
-                )
+                logger.warning("Leaderboard message update failed board_key=%s", self._config.board_key)
 
     async def build_embed(self, tab: str) -> discord.Embed:
         tab = (tab or "today").lower().strip()
@@ -169,13 +170,14 @@ class LeaderboardPublisher:
             tab = "today"
 
         dutch = self._is_dutch()
+        combined = self._is_combined()
         guild_id = self._guild_id()
 
         if tab == "all_time":
             rows = await self._leaderboard_repo.get_global_leaderboard(
                 limit=self._config.limit, guild_id=guild_id
             )
-            return self._embed_all_time(rows, dutch=dutch)
+            return self._embed_all_time(rows, dutch=dutch, combined=combined)
 
         if tab == "by_game":
             boards = await self._leaderboard_repo.get_per_game_earned_leaderboards(
@@ -193,8 +195,14 @@ class LeaderboardPublisher:
                 limit=self._config.limit,
                 guild_id=guild_id,
             )
-            title = "🗓️ Nederlandse Spellen — Deze Week" if dutch else "🗓️ English Games — This Week"
-            return self._embed_period(title=title, since_label=since, rows=rows, dutch=dutch)
+            title = self._period_title(period="week", dutch=dutch, combined=combined)
+            return self._embed_period(
+                title=title,
+                since_label=since,
+                rows=rows,
+                dutch=dutch,
+                combined=combined,
+            )
 
         since = self._fmt_sqlite(self._utc_start_of_today())
         rows = await self._leaderboard_repo.get_english_earned_since(
@@ -203,21 +211,44 @@ class LeaderboardPublisher:
             limit=self._config.limit,
             guild_id=guild_id,
         )
-        title = "📅 Nederlandse Spellen — Vandaag" if dutch else "📅 English Games — Today"
-        return self._embed_period(title=title, since_label=since, rows=rows, dutch=dutch)
+        title = self._period_title(period="today", dutch=dutch, combined=combined)
+        return self._embed_period(
+            title=title,
+            since_label=since,
+            rows=rows,
+            dutch=dutch,
+            combined=combined,
+        )
+
+    @staticmethod
+    def _period_title(*, period: str, dutch: bool, combined: bool) -> str:
+        if combined:
+            return "Games - This Week" if period == "week" else "Games - Today"
+        if dutch:
+            return "Nederlandse Spellen - Deze Week" if period == "week" else "Nederlandse Spellen - Vandaag"
+        return "English Games - This Week" if period == "week" else "English Games - Today"
 
     def _embed_period(
-        self, *, title: str, since_label: str, rows: list[dict[str, Any]], dutch: bool = False
+        self,
+        *,
+        title: str,
+        since_label: str,
+        rows: list[dict[str, Any]],
+        dutch: bool = False,
+        combined: bool = False,
     ) -> discord.Embed:
-        desc = (
-            f"Bonen verdiend in spellen sinds **{since_label} UTC**"
-            if dutch else
-            f"Beans earned in English games since **{since_label} UTC**"
-        )
+        if combined:
+            desc = f"Beans earned across all Discord games since **{since_label} UTC**"
+        else:
+            desc = (
+                f"Bonen verdiend in spellen sinds **{since_label} UTC**"
+                if dutch else
+                f"Beans earned in English games since **{since_label} UTC**"
+            )
         embed = discord.Embed(title=title, description=desc)
 
         if not rows:
-            value = "Speel een spel om hier te verschijnen! 🎮" if dutch else "Play an English game to appear here!"
+            value = self._empty_period_text(dutch=dutch, combined=combined)
             embed.add_field(
                 name="Top spelers" if dutch else "Top players",
                 value=value,
@@ -226,11 +257,11 @@ class LeaderboardPublisher:
             return embed
 
         lines: list[str] = []
-        for i, r in enumerate(rows, start=1):
-            discord_user_id = str(r["discord_user_id"])
-            total_beans = int(r["total_beans"])
+        for i, row in enumerate(rows, start=1):
+            discord_user_id = str(row["discord_user_id"])
+            total_beans = int(row["total_beans"])
             unit = "bonen" if dutch else "beans"
-            lines.append(f"**{i}.** <@{discord_user_id}> — **{total_beans}** {unit}")
+            lines.append(f"**{i}.** <@{discord_user_id}> - **{total_beans}** {unit}")
 
         embed.add_field(
             name="Top spelers" if dutch else "Top players",
@@ -238,11 +269,15 @@ class LeaderboardPublisher:
             inline=False,
         )
         embed.set_footer(
-            text="Gebruik het menu om van periode te wisselen."
-            if dutch else
-            "Use the dropdown to switch period."
+            text="Gebruik het menu om van tab te wisselen." if dutch else "Use the dropdown to switch tabs."
         )
         return embed
+
+    @staticmethod
+    def _empty_period_text(*, dutch: bool, combined: bool) -> str:
+        if combined:
+            return "Play any game to appear here!"
+        return "Speel een spel om hier te verschijnen." if dutch else "Play an English game to appear here!"
 
     def _game_label(self, game_key: str) -> str:
         return self._config.game_labels.get(game_key) or game_key.replace("_", " ").title()
@@ -266,7 +301,7 @@ class LeaderboardPublisher:
             any_rows = True
             unit = "bonen" if dutch else "beans"
             lines = [
-                f"**{i}.** <@{r['discord_user_id']}> — **{int(r['total_beans'])}** {unit}"
+                f"**{i}.** <@{r['discord_user_id']}> - **{int(r['total_beans'])}** {unit}"
                 for i, r in enumerate(rows, start=1)
             ]
             embed.add_field(name=self._game_label(game_key), value="\n".join(lines), inline=False)
@@ -275,15 +310,19 @@ class LeaderboardPublisher:
             embed.description = "Speel een spel om hier te verschijnen." if dutch else "Play a game to appear here."
 
         embed.set_footer(
-            text="Gerangschikt op bonen per spel."
-            if dutch else
-            "Ranked by beans earned in each game."
+            text="Gerangschikt op bonen per spel." if dutch else "Ranked by beans earned in each game."
         )
         return embed
 
-    def _embed_all_time(self, rows: list[Any], dutch: bool = False) -> discord.Embed:
-        title = "🏆 Totale Bonen — Alltime" if dutch else "🏆 Global Beans — All Time"
-        desc = "Gerangschikt op huidige bonensaldo." if dutch else "Ranked by current bean balance."
+    def _embed_all_time(
+        self, rows: list[Any], dutch: bool = False, combined: bool = False
+    ) -> discord.Embed:
+        if combined:
+            title = "Game Beans - All Time"
+            desc = "Ranked by current bean balance across game servers."
+        else:
+            title = "Totale Bonen - Alltime" if dutch else "Global Beans - All Time"
+            desc = "Gerangschikt op huidige bonensaldo." if dutch else "Ranked by current bean balance."
         embed = discord.Embed(title=title, description=desc)
 
         if not rows:
@@ -300,7 +339,7 @@ class LeaderboardPublisher:
             if isinstance(name, str) and name.isdigit():
                 name = f"<@{name}>"
             unit = "bonen" if dutch else "beans"
-            lines.append(f"**{i}.** {name} — **{row.balance}** {unit}")
+            lines.append(f"**{i}.** {name} - **{row.balance}** {unit}")
 
         embed.add_field(
             name="Top spelers" if dutch else "Top players",
@@ -308,9 +347,7 @@ class LeaderboardPublisher:
             inline=False,
         )
         embed.set_footer(
-            text="Gebruik het menu om van periode te wisselen."
-            if dutch else
-            "Use the dropdown to switch period."
+            text="Gebruik het menu om van tab te wisselen." if dutch else "Use the dropdown to switch tabs."
         )
         return embed
 
@@ -337,9 +374,7 @@ class LeaderboardPublisher:
                 await msg.edit(embed=embed, view=view)
                 return msg.id
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                logger.warning(
-                    "Leaderboard message could not be edited; recreating. board_key=%s", board_key
-                )
+                logger.warning("Leaderboard message could not be edited; recreating. board_key=%s", board_key)
 
         sent = await channel.send(embed=embed, view=view)
         await self._posts_repo.upsert_message_id(
@@ -355,25 +390,28 @@ class LeaderboardDropdown(discord.ui.Select):
     def __init__(self, publisher: LeaderboardPublisher) -> None:
         self._publisher = publisher
         dutch = publisher._is_dutch()
+        combined = publisher._is_combined()
 
         if dutch:
             options = [
-                discord.SelectOption(label="Per spel", value="by_game", emoji="🎮", description="Top spelers per spel"),
-                discord.SelectOption(label="Vandaag", value="today", emoji="📅", description="Spellen — vandaag"),
-                discord.SelectOption(label="Deze Week", value="week", emoji="🗓️", description="Spellen — deze week"),
-                discord.SelectOption(label="Alltime", value="all_time", emoji="🏆", description="Totale bonen"),
+                discord.SelectOption(label="Per spel", value="by_game", description="Top spelers per spel"),
+                discord.SelectOption(label="Vandaag", value="today", description="Spellen vandaag"),
+                discord.SelectOption(label="Deze Week", value="week", description="Spellen deze week"),
+                discord.SelectOption(label="Alltime", value="all_time", description="Totale bonen"),
             ]
             custom_id = "leaderboard:dropdown:nl:v1"
-            placeholder = "Bekijk scorebord…"
+            placeholder = "Bekijk scorebord..."
         else:
+            today_desc = "All games today" if combined else "English games today"
+            week_desc = "All games this week" if combined else "English games this week"
             options = [
-                discord.SelectOption(label="By Game", value="by_game", emoji="🎮", description="Top players per game"),
-                discord.SelectOption(label="Today", value="today", emoji="📅", description="English games — today"),
-                discord.SelectOption(label="This Week", value="week", emoji="🗓️", description="English games — this week"),
-                discord.SelectOption(label="All Time", value="all_time", emoji="🏆", description="Global bean balance"),
+                discord.SelectOption(label="By Game", value="by_game", description="Top players per game"),
+                discord.SelectOption(label="Today", value="today", description=today_desc),
+                discord.SelectOption(label="This Week", value="week", description=week_desc),
+                discord.SelectOption(label="All Time", value="all_time", description="Current bean balance"),
             ]
-            custom_id = "leaderboard:dropdown:v1"
-            placeholder = "View leaderboard…"
+            custom_id = "leaderboard:dropdown:games:v1" if combined else "leaderboard:dropdown:v1"
+            placeholder = "View leaderboard..."
 
         super().__init__(
             placeholder=placeholder,
