@@ -7,11 +7,14 @@ from typing import Any
 
 import discord
 
+from src.config.channels import UNSCRAMBLE_CHANNEL_ID, WORDLE_CHANNEL_ID, WORD_CHAIN_CHANNEL_ID
+
 
 logger = logging.getLogger(__name__)
 
 _WORD_RE = re.compile(r"[^A-Za-z' -]+")
 _TRACKED_GAME_KEYS = ("wordle", "unscramble", "word_chain")
+_ALLOWED_CHANNEL_IDS = {WORDLE_CHANNEL_ID, UNSCRAMBLE_CHANNEL_ID, WORD_CHAIN_CHANNEL_ID}
 
 
 def _clean_word(word: str | None) -> str:
@@ -178,7 +181,8 @@ def _answer_for(game_key: str, state: dict[str, Any] | None, user_id: int) -> st
 
 async def capture_sentence_practice_state(services: dict[str, Any], message: discord.Message) -> dict[str, dict[str, Any]]:
     repo = services.get("games_repo")
-    if not repo or not hasattr(message.channel, "id"):
+    channel_id = getattr(message.channel, "id", None)
+    if not repo or channel_id not in _ALLOWED_CHANNEL_IDS:
         return {}
 
     snapshot: dict[str, dict[str, Any]] = {}
@@ -186,7 +190,7 @@ async def capture_sentence_practice_state(services: dict[str, Any], message: dis
         try:
             session = await repo.get_active_session(
                 platform="discord",
-                location_id=str(message.channel.id),
+                location_id=str(channel_id),
                 thread_id=None,
                 game_key=game_key,
             )
