@@ -94,4 +94,4 @@ async def setup(bot: discord.Client) -> None:
     async def on_error(event_method: str, /, *args: Any, **kwargs: Any) -> None:
         logger.exception("Unhandled exception in Discord event: %s", event_method)
 
-    logger.info("Discord events registered (on_message, on_error)
+    logger.info("Discord events registered (on_message, on_error)")
