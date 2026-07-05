@@ -99,18 +99,6 @@ DISCORD_GAME_INSTRUCTIONS: tuple[DiscordInstruction, ...] = (
         notes=("Answer in this channel when a round is active.",),
     ),
     DiscordInstruction(
-        channel_id=GEO_LANGUAGE_CHANNEL_ID,
-        marker="instructions:discord:geo-language:en:v1",
-        title="GeoGuessr Languages",
-        body="Guess the language or country from the language clue.",
-        commands=(
-            "/geoguessr language_start - start a language round",
-            "/geoguessr language_stop - stop your current round",
-            "/geoguessr language_help - show the rules",
-        ),
-        notes=("Answer in this channel when a round is active.",),
-    ),
-    DiscordInstruction(
         channel_id=DUTCH_WORDLE_CHANNEL_ID,
         marker="instructions:discord:wordle:nl:v1",
         title="Woordle",
@@ -121,28 +109,6 @@ DISCORD_GAME_INSTRUCTIONS: tuple[DiscordInstruction, ...] = (
             "/games wordle_nl_restart - herstart de puzzel in dit kanaal",
         ),
         notes=("Typ elk woord van 5 letters als normaal bericht in dit kanaal.",),
-    ),
-    DiscordInstruction(
-        channel_id=DUTCH_UNSCRAMBLE_CHANNEL_ID,
-        marker="instructions:discord:unscramble:nl:v1",
-        title="Ontwar het Woord",
-        body="Zet de gehusselde letters terug in de goede volgorde.",
-        commands=(
-            "/games ontwar_start - start je puzzel",
-            "/games ontwar_hint - onthul de eerste letter",
-            "/games ontwar_stop - stop je huidige ronde",
-        ),
-        notes=("Typ je antwoord als normaal bericht nadat de puzzel verschijnt.",),
-    ),
-    DiscordInstruction(
-        channel_id=DUTCH_WORD_CHAIN_CHANNEL_ID,
-        marker="instructions:discord:word-chain:nl:v1",
-        title="Woordketting",
-        body="Bouw een ketting waarin elk woord begint met de laatste letter van het vorige woord.",
-        commands=(
-            "/games woordketting_start - start een live ketting",
-        ),
-        notes=("Typ elk volgend woord als normaal bericht in dit kanaal.",),
     ),
     DiscordInstruction(
         channel_id=DUTCH_NIET_GEEN_CHANNEL_ID,

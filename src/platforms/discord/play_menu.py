@@ -9,11 +9,8 @@ from src.config.channels import (
     DUTCH_BIJVOEGLIJK_CHANNEL_ID,
     DUTCH_DE_OF_HET_CHANNEL_ID,
     DUTCH_NIET_GEEN_CHANNEL_ID,
-    DUTCH_UNSCRAMBLE_CHANNEL_ID,
     DUTCH_WORDLE_CHANNEL_ID,
-    DUTCH_WORD_CHAIN_CHANNEL_ID,
     GEO_FLAGS_CHANNEL_ID,
-    GEO_LANGUAGE_CHANNEL_ID,
     UNSCRAMBLE_CHANNEL_ID,
     WORDLE_CHANNEL_ID,
     WORD_CHAIN_CHANNEL_ID,
@@ -35,13 +32,10 @@ EN_OPTIONS: tuple[PlayOption, ...] = (
     PlayOption("unscramble", "Unscramble", UNSCRAMBLE_CHANNEL_ID, "/games unscramble_start", "Make the word from shuffled letters.", 0),
     PlayOption("wordchain", "Word Chain", WORD_CHAIN_CHANNEL_ID, "/games wordchain_start", "Build a chain from the last letter.", 0),
     PlayOption("geo_flags", "Geo Flags", GEO_FLAGS_CHANNEL_ID, "/geoguessr flags_start", "Guess the country from a flag.", 1),
-    PlayOption("geo_language", "Geo Language", GEO_LANGUAGE_CHANNEL_ID, "/geoguessr language_start", "Guess the language from a clue.", 1),
 )
 
 NL_OPTIONS: tuple[PlayOption, ...] = (
     PlayOption("wordle_nl", "Woordle", DUTCH_WORDLE_CHANNEL_ID, "/games wordle_nl_start", "Raad het 5-letter woord.", 0),
-    PlayOption("ontwar", "Ontwar", DUTCH_UNSCRAMBLE_CHANNEL_ID, "/games ontwar_start", "Zet de letters in de goede volgorde.", 0),
-    PlayOption("woordketting", "Woordketting", DUTCH_WORD_CHAIN_CHANNEL_ID, "/games woordketting_start", "Maak een ketting van woorden.", 0),
     PlayOption("niet_geen", "Niet vs Geen", DUTCH_NIET_GEEN_CHANNEL_ID, "/nietgeen", "Oefen wanneer je niet of geen gebruikt.", 1),
     PlayOption("bijvoeglijk", "Bijvoeglijk", DUTCH_BIJVOEGLIJK_CHANNEL_ID, "/bijvoeglijk_start", "Oefen -e of geen -e.", 1),
     PlayOption("de_of_het", "De of Het", DUTCH_DE_OF_HET_CHANNEL_ID, "/deofhet_start", "Oefen Nederlandse lidwoorden.", 1),
@@ -218,14 +212,6 @@ async def _start_option(
         await game.start_for_user(channel=channel, user=interaction.user)
         return True
 
-    if option.key == "ontwar":
-        game = services.get("unscramble_nl")
-        if not game:
-            await interaction.followup.send("Ontwar het Woord is niet beschikbaar.", ephemeral=True)
-            return False
-        await game.start_for_user(channel=channel, user=interaction.user)
-        return True
-
     if option.key == "wordchain":
         game = services.get("word_chain")
         if not game:
@@ -240,32 +226,10 @@ async def _start_option(
         await game.start_in_channel(channel_id=interaction.channel_id, status_message_id=status_msg.id)
         return True
 
-    if option.key == "woordketting":
-        game = services.get("word_chain_nl")
-        if not game:
-            await interaction.followup.send("Woordketting is niet beschikbaar.", ephemeral=True)
-            return False
-        status_msg = await channel.send(
-            embed=discord.Embed(
-                title="Woordketting",
-                description="Typ je eerste woord. Elk woord begint met de laatste letter van het vorige woord.",
-            )
-        )
-        await game.start_in_channel(channel_id=interaction.channel_id, status_message_id=status_msg.id)
-        return True
-
     if option.key == "geo_flags":
         game = services.get("geo_flags")
         if not game:
             await interaction.followup.send("Geo Flags is not available.", ephemeral=True)
-            return False
-        await game.start_for_user(channel=channel, user=interaction.user)
-        return True
-
-    if option.key == "geo_language":
-        game = services.get("geo_language")
-        if not game:
-            await interaction.followup.send("Geo Language is not available.", ephemeral=True)
             return False
         await game.start_for_user(channel=channel, user=interaction.user)
         return True
