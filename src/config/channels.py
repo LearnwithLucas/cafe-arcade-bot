@@ -22,6 +22,7 @@ WORD_CHAIN_CHANNEL_ID = 1481745881123520573
 WORDLE_CHANNEL_ID = 1481745735652474920
 UNSCRAMBLE_CHANNEL_ID = 1481745817021845607
 LEADERBOARD_CHANNEL_ID = 1523039716063182858
+ENGLISH_PRACTICE_GAME_CHANNEL_ID = 1523035685068607612
 GEO_LEARNING_CHANNEL_ID = 0
 GEO_FLAGS_CHANNEL_ID = 1481763185668395263
 GEO_LANGUAGE_CHANNEL_ID = 1481763326164865087
@@ -70,6 +71,20 @@ DISCORD_GAME_INSTRUCTIONS: tuple[DiscordInstruction, ...] = (
             "/games wordchain_start - start a live chain",
         ),
         notes=("Type each next word as a normal message in this channel.",),
+    ),
+    DiscordInstruction(
+        channel_id=ENGLISH_PRACTICE_GAME_CHANNEL_ID,
+        marker="instructions:discord:english-practice-game:en:v1",
+        title="English Practice Game",
+        body="Play the Learn with Lucas website practice game and use the games leaderboard to compare Discord game progress.",
+        commands=(
+            "https://learnwithlucas.com/english-practice-game/ - play the website game",
+            "/play - choose a Discord game",
+        ),
+        notes=(
+            "Website scores are not sent to Discord automatically yet.",
+            "Discord game scores appear in <#1523039716063182858>.",
+        ),
     ),
     DiscordInstruction(
         channel_id=GEO_FLAGS_CHANNEL_ID,
