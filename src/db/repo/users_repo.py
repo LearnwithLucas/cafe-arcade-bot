@@ -132,6 +132,54 @@ class UsersRepository:
         )
 
     # -------------------------
+    # Small app state
+    # -------------------------
+
+    @staticmethod
+    def _kv_scope(guild_id: int | str | None) -> str:
+        return str(guild_id) if guild_id is not None else "global"
+
+    async def _ensure_kv_table(self) -> None:
+        await self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_kv (
+                scope TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (scope, key)
+            )
+            """
+        )
+
+    async def kv_get(self, guild_id: int | str | None, key: str) -> Optional[str]:
+        await self._ensure_kv_table()
+        row = await self._db.fetchone(
+            """
+            SELECT value
+            FROM app_kv
+            WHERE scope = ? AND key = ?
+            """,
+            (self._kv_scope(guild_id), key),
+        )
+        if not row or row["value"] is None:
+            return None
+        return str(row["value"])
+
+    async def kv_set(self, guild_id: int | str | None, key: str, value: str) -> None:
+        await self._ensure_kv_table()
+        await self._db.execute(
+            """
+            INSERT INTO app_kv (scope, key, value, updated_at)
+            VALUES (?, ?, ?, datetime('now'))
+            ON CONFLICT(scope, key)
+            DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+            """,
+            (self._kv_scope(guild_id), key, str(value)),
+        )
+
+    # -------------------------
     # Mapping
     # -------------------------
 
