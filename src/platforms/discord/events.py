@@ -5,6 +5,11 @@ from typing import Any
 
 import discord
 
+from src.services.sentence_practice import (
+    capture_sentence_practice_state,
+    maybe_send_sentence_practice_after_game,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,7 +82,11 @@ async def setup(bot: discord.Client) -> None:
         registry = services.get("game_registry")
         if registry:
             try:
-                await registry.handle_discord_message(message)
+                sentence_before = await capture_sentence_practice_state(services, message)
+                consumed = await registry.handle_discord_message(message)
+                if consumed:
+                    await maybe_send_sentence_practice_after_game(services, message, sentence_before)
+                    return
             except Exception:
                 logger.exception("Error in game_registry.handle_discord_message")
 
@@ -85,4 +94,4 @@ async def setup(bot: discord.Client) -> None:
     async def on_error(event_method: str, /, *args: Any, **kwargs: Any) -> None:
         logger.exception("Unhandled exception in Discord event: %s", event_method)
 
-    logger.info("Discord events registered (on_message, on_error)")
+    logger.info("Discord events registered (on_message, on_error)
