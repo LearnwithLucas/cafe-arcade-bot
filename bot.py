@@ -353,20 +353,30 @@ async def dumps_cmd(interaction: discord.Interaction, days: app_commands.Range[i
 
 
 @app_commands.command(name="skill", description="Profit per XP for a skill at your level")
-@app_commands.describe(skill="Skill", level="Your level", f2p="F2P methods only", instant="Use instant prices instead of patient ones")
-@app_commands.choices(skill=[app_commands.Choice(name=s, value=s) for s in market.SKILLS])
+@app_commands.describe(skill="Skill", level="Your level", f2p="F2P methods only (default on)",
+                       instant="Use instant prices instead of patient ones",
+                       sort="Fastest XP that still profits (default), or most gp per XP")
+@app_commands.choices(skill=[app_commands.Choice(name=s, value=s) for s in market.SKILLS],
+                      sort=[app_commands.Choice(name="Fastest XP that still profits", value="xp"),
+                            app_commands.Choice(name="Most gp per XP", value="gp")])
 async def skill_cmd(interaction: discord.Interaction, skill: str, level: app_commands.Range[int, 1, 99],
-                    f2p: bool = True, instant: bool = False) -> None:
+                    f2p: bool = True, instant: bool = False, sort: str = "xp") -> None:
     b = bot_of(interaction)
     res = [market.eval_method(m, b.by_name, b.mapping, b.latest, b.h1, b.d1, instant) for m in market.METHODS
            if m["skill"] == skill and m["lvl"] <= level]
     res = [r for r in res if not r.missing and r.xp > 0 and not (f2p and r.members)]
-    res.sort(key=lambda r: r.per_xp, reverse=True)
-    e = discord.Embed(title=f"{skill} at level {level}", color=COLOR)
+    if sort == "gp":
+        res.sort(key=lambda r: r.per_xp, reverse=True)
+    else:
+        # Profitable methods first, highest XP per action first; loss-making ones after, cheapest XP first.
+        res.sort(key=lambda r: (r.profit >= 0, r.xp if r.profit >= 0 else r.per_xp), reverse=True)
+    label = "fastest XP that still profits" if sort != "gp" else "most gp per XP"
+    e = discord.Embed(title=f"{skill} at level {level}", color=COLOR,
+                      description=f"{'F2P methods only' if f2p else 'F2P and members methods'}, sorted by {label}.")
     if not res:
         e.description = "No priced methods for this level and filter."
     to_next = market.xp_for_level(level + 1) - market.xp_for_level(level) if level < 99 else 0
-    for i, r in enumerate(res[:8]):
+    for i, r in enumerate(res[:10]):
         extra = ""
         if i == 0 and to_next:
             acts = -(-to_next // r.xp)
