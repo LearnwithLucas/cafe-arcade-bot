@@ -67,6 +67,7 @@ from src.games.unfair_quiz import UnfairQuizGame
 from src.jobs.daily_challenge import DailyChallengeJob
 from src.platforms.discord.bot import build_discord_bot
 from src.platforms.telegram.bot import build_telegram_bot
+from src.tradingcow.bot import run_tradingcow
 
 # ---- Assets ----
 WORDS_TXT_PATH = Path("src/assets/words_en.txt")
@@ -444,9 +445,15 @@ async def main() -> None:
 
     daily_challenge.start(discord_bot)
 
+    # --- TradingCow (separate bot, only runs when TRADINGCOW_DISCORD_TOKEN is set) ---
+    tradingcow_task = asyncio.create_task(run_tradingcow(settings.db_path.parent))
+
     try:
         await discord_bot.start(settings.discord_token)
     finally:
+        tradingcow_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await tradingcow_task
         if telegram_task:
             telegram_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
