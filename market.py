@@ -126,7 +126,7 @@ class Flip:
 
 
 def flips(mapping: dict, latest: dict, h1: dict, d1: dict, *, cash: int, slots: int, max_hours: float,
-          min_profit: int, f2p: bool, max_risk: str, min_margin: int = 5, min_roi: float = 0.01) -> list[Flip]:
+          min_profit: int, f2p: bool, max_risk: str, min_margin: int = 5, min_roi: float = 0.01, members_only: bool = False) -> list[Flip]:
     """Best patient flips: buy near the instant-sell price, sell near the instant-buy price.
 
     A flip needs at least min_margin gp and min_roi profit per item after tax, so one price
@@ -137,6 +137,8 @@ def flips(mapping: dict, latest: dict, h1: dict, d1: dict, *, cash: int, slots: 
     out = []
     for item_id, m in mapping.items():
         if f2p and m.get("members"):
+            continue
+        if members_only and not m.get("members"):
             continue
         q = quote(item_id, latest, h1, d1)
         if not q or q.net <= 0 or risk_rank[q.risk] > risk_rank[max_risk]:

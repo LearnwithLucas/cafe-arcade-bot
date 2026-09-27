@@ -24,6 +24,16 @@ log = logging.getLogger("tradingcow")
 COLOR = 0xE0A53A
 HOUR = 3600
 
+# Where each kind of message goes. Override any of them with an environment variable.
+CHANNELS = {
+    "dumps": int(os.getenv("TRADINGCOW_CHANNEL_DUMPS", "1552974535568138250")),
+    "f2p": int(os.getenv("TRADINGCOW_CHANNEL_F2P", "1552974595764658277")),
+    "p2p": int(os.getenv("TRADINGCOW_CHANNEL_P2P", "1552974638777245726")),
+    "general": int(os.getenv("TRADINGCOW_CHANNEL_GENERAL", "1552970635247095939")),
+}
+BOARD_CASH = int(os.getenv("TRADINGCOW_BOARD_CASH", "10000000"))
+BOARD_MIN_PROFIT = int(os.getenv("TRADINGCOW_BOARD_MIN_PROFIT", "10000"))
+
 
 def n(v) -> str:
     try:
@@ -90,10 +100,11 @@ class TradingCow(commands.Bot):
         self.price_loop.start()
         self.hour_loop.start()
         self.dump_loop.start()
+        self.board_loop.start()
         self.backfill_task = asyncio.create_task(self.backfill())
 
     async def close(self) -> None:
-        for loop in (self.price_loop, self.hour_loop, self.dump_loop):
+        for loop in (self.price_loop, self.hour_loop, self.dump_loop, self.board_loop):
             loop.cancel()
         if self.backfill_task:
             self.backfill_task.cancel()
@@ -158,7 +169,7 @@ class TradingCow(commands.Bot):
     @tasks.loop(minutes=15)
     async def dump_loop(self) -> None:
         try:
-            channel = await self.alert_channel()
+            channel = await self.channel("dumps")
             if not channel:
                 return
             history = await self.store.history(int(time.time()) - 8 * 24 * HOUR)
@@ -172,15 +183,48 @@ class TradingCow(commands.Bot):
         except Exception:
             log.exception("TradingCow dump scan failed")
 
+    @tasks.loop(minutes=10)
+    async def board_loop(self) -> None:
+        """Keep one live flip board per channel: the message is edited, not reposted."""
+        for kind in ("f2p", "p2p"):
+            try:
+                channel = await self.channel(kind)
+                if not channel or not self.latest:
+                    continue
+                rows = market.flips(self.mapping, self.latest, self.h1, self.d1, cash=BOARD_CASH, slots=1, max_hours=6,
+                                    min_profit=BOARD_MIN_PROFIT, f2p=kind == "f2p", max_risk="medium",
+                                    members_only=kind == "p2p")[:12]
+                embed = flips_embed(rows, f"{'F2P' if kind == 'f2p' else 'Members'} flips, live board",
+                                    f"Best patient flips for one GE slot and up to {n(BOARD_CASH / 1e6)}m, filled within about 6h. "
+                                    f"Updated <t:{int(time.time())}:R>. Use /flips for your own cash and slots.")
+                key = f"board:{kind}:{channel.id}"
+                msg_id = await self.store.get(key)
+                msg = None
+                if msg_id:
+                    try:
+                        msg = await channel.fetch_message(int(msg_id))
+                    except discord.HTTPException:
+                        msg = None
+                if msg:
+                    await msg.edit(embed=embed)
+                else:
+                    msg = await channel.send(embed=embed)
+                    await self.store.set(key, str(msg.id))
+            except Exception:
+                log.exception("TradingCow %s board update failed", kind)
+
     @price_loop.before_loop
     @hour_loop.before_loop
     @dump_loop.before_loop
+    @board_loop.before_loop
     async def _wait(self) -> None:
         await self.wait_until_ready()
 
-    async def alert_channel(self):
-        raw = await self.store.get("alert_channel")
-        cid = int(raw) if raw else self.default_alert_channel
+    async def channel(self, kind: str):
+        cid = CHANNELS.get(kind)
+        if kind == "dumps":
+            raw = await self.store.get("alert_channel")
+            cid = int(raw) if raw else (self.default_alert_channel or cid)
         if not cid:
             return None
         ch = self.get_channel(cid)
@@ -214,14 +258,14 @@ class TradingCow(commands.Bot):
                 await self.store.set_fired(w["id"], False)
 
     async def deliver(self, user_id: int, channel_id: int | None, text: str) -> None:
-        if channel_id:
-            ch = self.get_channel(channel_id)
-            if ch:
-                try:
-                    await ch.send(text, allowed_mentions=discord.AllowedMentions(users=True))
-                    return
-                except discord.HTTPException:
-                    pass
+        """Watch alerts go to the channel picked with here:True, else the general channel, else a DM."""
+        ch = self.get_channel(channel_id) if channel_id else await self.channel("general")
+        if ch:
+            try:
+                await ch.send(text, allowed_mentions=discord.AllowedMentions(users=True))
+                return
+            except discord.HTTPException:
+                pass
         try:
             user = self.get_user(user_id) or await self.fetch_user(user_id)
             await user.send(text)
@@ -254,6 +298,18 @@ async def item_autocomplete(interaction: discord.Interaction, current: str) -> l
     starts = [m["name"] for m in b.mapping.values() if m["name"].lower().startswith(cur)]
     contains = [m["name"] for m in b.mapping.values() if cur in m["name"].lower() and not m["name"].lower().startswith(cur)]
     return [app_commands.Choice(name=x, value=x) for x in (sorted(starts, key=len) + sorted(contains, key=len))[:25]]
+
+
+def flips_embed(rows: list[market.Flip], title: str, description: str | None = None) -> discord.Embed:
+    e = discord.Embed(title=title, color=COLOR, description=description)
+    if not rows:
+        e.description = (description + "\n\n" if description else "") + "Nothing passes the filters right now."
+    for f in rows:
+        flags = f" ({', '.join(l for _, l in f.q.flags)})" if f.q.flags else ""
+        e.add_field(name=f"{f.name}: {signed(f.profit)}",
+                    value=f"Buy {n(f.qty)} at {n(f.q.p_buy)}, sell at {n(f.q.p_sell)} ({signed(f.q.net)} each). "
+                          f"Fill about {hrs(f.hours)}. Risk {f.q.risk}{flags}.", inline=False)
+    return e
 
 
 def dump_embed(dumps: list[market.Dump], title: str) -> discord.Embed:
@@ -320,14 +376,7 @@ async def flips_cmd(interaction: discord.Interaction, cash: str, slots: app_comm
     rows = market.flips(b.mapping, b.latest, b.h1, b.d1, cash=c, slots=slots, max_hours=float(speed),
                         min_profit=mp, f2p=f2p, max_risk=risk, min_margin=min_margin,
                         min_roi=min_roi / 100)[:10]
-    e = discord.Embed(title=f"Flips for {n(c)} over {slots} slot(s)", color=COLOR)
-    if not rows:
-        e.description = "Nothing passes these filters. Try more time, less minimum profit or more risk."
-    for f in rows:
-        flags = f" ({', '.join(l for _, l in f.q.flags)})" if f.q.flags else ""
-        e.add_field(name=f"{f.name}: {signed(f.profit)}",
-                    value=f"Buy {n(f.qty)} at {n(f.q.p_buy)}, sell at {n(f.q.p_sell)} ({signed(f.q.net)} each). "
-                          f"Fill about {hrs(f.hours)}. Risk {f.q.risk}{flags}.", inline=False)
+    e = flips_embed(rows, f"Flips for {n(c)} over {slots} slot(s)")
     e.set_footer(text=f"At least {min_margin} gp and {min_roi:g}% profit per item. Fill times assume you catch a quarter of the hourly volume.")
     await interaction.response.send_message(embed=e)
 
@@ -439,7 +488,7 @@ async def help_cmd(interaction: discord.Interaction) -> None:
         "/flips cash: best flips for your cash, slots and patience\n"
         "/dumps: items well under their weekly average\n"
         "/skill skill level: profit per XP at your level\n"
-        "/watch add, list, remove: price alerts by DM\n"
+        "/watch add, list, remove: price alerts (posted in the general channel)\n"
         "/tc_alerts channel: where automatic dump alerts go\n\n"
         "Prices come from the OSRS Wiki. The bot never touches your account."))
     await interaction.response.send_message(embed=e, ephemeral=True)
