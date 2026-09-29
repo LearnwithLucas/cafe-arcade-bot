@@ -126,18 +126,26 @@ class Flip:
 
 
 def flips(mapping: dict, latest: dict, h1: dict, d1: dict, *, cash: int, slots: int, max_hours: float,
-          min_profit: int, f2p: bool, max_risk: str) -> list[Flip]:
-    """Best patient flips: buy near the instant-sell price, sell near the instant-buy price."""
+          min_profit: int, f2p: bool, max_risk: str, min_margin: int = 5, min_roi: float = 0.01, members_only: bool = False) -> list[Flip]:
+    """Best patient flips: buy near the instant-sell price, sell near the instant-buy price.
+
+    A flip needs at least min_margin gp and min_roi profit per item after tax, so one price
+    tick against you cannot wipe it out.
+    """
     per_slot = cash / max(1, slots)
     risk_rank = {"low": 0, "medium": 1, "high": 2}
     out = []
     for item_id, m in mapping.items():
         if f2p and m.get("members"):
             continue
+        if members_only and not m.get("members"):
+            continue
         q = quote(item_id, latest, h1, d1)
         if not q or q.net <= 0 or risk_rank[q.risk] > risk_rank[max_risk]:
             continue
         if not (q.vol_buy_side > 0 and q.vol_sell_side > 0) or q.p_buy <= 0:
+            continue
+        if q.net < min_margin or q.net / q.p_buy < min_roi:
             continue
         per_unit_h = 1 / SHARE * (1 / q.vol_buy_side + 1 / q.vol_sell_side)
         limit = m.get("limit") or 10**9
@@ -179,11 +187,13 @@ class Dump:
 
 def find_dumps(mapping: dict, latest: dict, history: dict, *, now: float | None = None, min_drop: float = 0.10,
                min_daily_gp: float = 5_000_000, min_price: int = 50, f2p: bool = False,
-               window_hours: int = 168) -> list[Dump]:
+               window_hours: int = 168, min_sell_ratio: float = 1.5) -> list[Dump]:
     """history: {item_id: [(ts, avg_high, avg_low, high_vol, low_vol), ...]} hourly rows, any order.
 
     A dump is an item whose current instant-sell price sits well under its volume-weighted
-    average for the window, confirmed by the last full hour (so one stray trade does not count).
+    average for the window, confirmed by the last full hour (so one stray trade does not count)
+    and by heavy selling: the last hour's insta-sell volume must be min_sell_ratio times normal.
+    A lower price on thin trading is not a dump.
     """
     now = now or time.time()
     start = now - window_hours * 3600
@@ -222,6 +232,8 @@ def find_dumps(mapping: dict, latest: dict, history: dict, *, now: float | None 
             continue
         hourly_avg_sell = vol_low / hours_span
         ratio = (last[4] or 0) / hourly_avg_sell if hourly_avg_sell else 0
+        if ratio < min_sell_ratio:
+            continue
         day_ago = [r for r in rows if now - 30 * 3600 <= r[0] <= now - 20 * 3600 and r[2]]
         sudden = bool(day_ago) and min(abs(1 - r[2] / base_low) for r in day_ago) < 0.05
         target = (base_low + base_high) / 2
