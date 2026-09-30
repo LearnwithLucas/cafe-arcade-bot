@@ -86,7 +86,7 @@ class TradingCow(commands.Bot):
         await self.store.connect()
         await self.refresh_prices(force=True)
         self.tree.add_command(watch_group)
-        for cmd in (price_cmd, flips_cmd, dumps_cmd, skill_cmd, alerts_cmd, help_cmd):
+        for cmd in (price_cmd, flips_cmd, dumps_cmd, skill_cmd, channel_cmd, channels_cmd, help_cmd):
             self.tree.add_command(cmd)
         if self.guild_ids:
             for gid in self.guild_ids:
@@ -221,10 +221,11 @@ class TradingCow(commands.Bot):
         await self.wait_until_ready()
 
     async def channel(self, kind: str):
-        cid = CHANNELS.get(kind)
-        if kind == "dumps":
-            raw = await self.store.get("alert_channel")
-            cid = int(raw) if raw else (self.default_alert_channel or cid)
+        """Channel for a message kind: set with /tc_channel first, then the environment variable, then the default."""
+        raw = await self.store.get(f"channel:{kind}")
+        if not raw and kind == "dumps":
+            raw = await self.store.get("alert_channel")  # set with the old /tc_alerts
+        cid = int(raw) if raw else CHANNELS.get(kind)
         if not cid:
             return None
         ch = self.get_channel(cid)
@@ -481,11 +482,45 @@ async def watch_remove(interaction: discord.Interaction, watch_id: int) -> None:
     await interaction.response.send_message("Removed." if ok else "No watch with that number.", ephemeral=True)
 
 
-@app_commands.command(name="tc_alerts", description="Choose the channel for automatic dump alerts")
-@app_commands.default_permissions(manage_guild=True)
-async def alerts_cmd(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
-    await bot_of(interaction).store.set("alert_channel", str(channel.id))
-    await interaction.response.send_message(f"Dump alerts will go to {channel.mention}.", ephemeral=True)
+ADMIN_IDS = {int(x) for x in re.split(r"[,\s]+", os.getenv("TRADINGCOW_ADMIN_IDS", "")) if x.strip().isdigit()}
+
+
+def can_configure(interaction: discord.Interaction) -> bool:
+    """TRADINGCOW_ADMIN_IDS decides when set; otherwise anyone who can manage channels."""
+    if ADMIN_IDS:
+        return interaction.user.id in ADMIN_IDS
+    perms = getattr(interaction.user, "guild_permissions", None)
+    return bool(perms and (perms.manage_channels or perms.administrator))
+
+
+@app_commands.command(name="tc_channel", description="Choose where TradingCow posts each kind of message")
+@app_commands.describe(kind="Which messages", channel="Where they should go")
+@app_commands.choices(kind=[app_commands.Choice(name="Sudden dumps", value="dumps"),
+                            app_commands.Choice(name="F2P flip board", value="f2p"),
+                            app_commands.Choice(name="Members flip board", value="p2p"),
+                            app_commands.Choice(name="Watch alerts (general)", value="general")])
+async def channel_cmd(interaction: discord.Interaction, kind: str, channel: discord.TextChannel) -> None:
+    if not can_configure(interaction):
+        await interaction.response.send_message(
+            "Only TradingCow admins can change this. Ask the owner to add your user ID to TRADINGCOW_ADMIN_IDS on Render.",
+            ephemeral=True)
+        return
+    b = bot_of(interaction)
+    await b.store.set(f"channel:{kind}", str(channel.id))
+    if kind == "dumps":
+        await b.store.set("alert_channel", "")
+    names = {"dumps": "Sudden dumps", "f2p": "The F2P flip board", "p2p": "The members flip board", "general": "Watch alerts"}
+    await interaction.response.send_message(f"{names[kind]} will now go to {channel.mention}.", ephemeral=True)
+
+
+@app_commands.command(name="tc_channels", description="Show where TradingCow posts each kind of message")
+async def channels_cmd(interaction: discord.Interaction) -> None:
+    b = bot_of(interaction)
+    lines = []
+    for kind, label in (("dumps", "Sudden dumps"), ("f2p", "F2P flip board"), ("p2p", "Members flip board"), ("general", "Watch alerts")):
+        ch = await b.channel(kind)
+        lines.append(f"{label}: {ch.mention if ch else 'not set'}")
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
 @app_commands.command(name="tc_help", description="What TradingCow can do")
@@ -496,7 +531,7 @@ async def help_cmd(interaction: discord.Interaction) -> None:
         "/dumps: items well under their weekly average\n"
         "/skill skill level: profit per XP at your level\n"
         "/watch add, list, remove: price alerts (posted in the general channel)\n"
-        "/tc_alerts channel: where automatic dump alerts go\n\n"
+        "/tc_channel, /tc_channels: where automatic posts go\n\n"
         "Prices come from the OSRS Wiki. The bot never touches your account."))
     await interaction.response.send_message(embed=e, ephemeral=True)
 
