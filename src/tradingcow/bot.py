@@ -359,13 +359,17 @@ async def price_cmd(interaction: discord.Interaction, item: str) -> None:
 
 @app_commands.command(name="flips", description="Best flips for your cash, free slots and patience")
 @app_commands.describe(cash="Cash to use, e.g. 1.5m", slots="Free GE slots", speed="How long you can wait",
-                       f2p="F2P items only", risk="Highest risk to allow", min_profit="Minimum profit per slot",
+                       items="F2P, members or all items (default: members in the P2P channel, F2P elsewhere)",
+                       risk="Highest risk to allow", min_profit="Minimum profit per slot",
                        min_margin="Minimum profit per item in gp (default 5)", min_roi="Minimum profit per item in % (default 1)")
 @app_commands.choices(speed=[app_commands.Choice(name=x, value=v) for x, v in
                              [("Fast (under 1h)", "1"), ("Medium (up to 6h)", "6"), ("Overnight (up to 16h)", "16")]],
-                      risk=[app_commands.Choice(name=x, value=x) for x in ("low", "medium", "high")])
+                      risk=[app_commands.Choice(name=x, value=x) for x in ("low", "medium", "high")],
+                      items=[app_commands.Choice(name="F2P items", value="f2p"),
+                             app_commands.Choice(name="Members items", value="p2p"),
+                             app_commands.Choice(name="All items", value="all")])
 async def flips_cmd(interaction: discord.Interaction, cash: str, slots: app_commands.Range[int, 1, 8] = 3,
-                    speed: str = "6", f2p: bool = True, risk: str = "medium", min_profit: str = "5k",
+                    speed: str = "6", items: str | None = None, risk: str = "medium", min_profit: str = "5k",
                     min_margin: app_commands.Range[int, 1, 1_000_000] = 5,
                     min_roi: app_commands.Range[float, 0.0, 50.0] = 1.0) -> None:
     b = bot_of(interaction)
@@ -373,10 +377,13 @@ async def flips_cmd(interaction: discord.Interaction, cash: str, slots: app_comm
     if c is None or mp is None:
         await interaction.response.send_message("Use amounts like 1500000, 1.5m or 800k.", ephemeral=True)
         return
+    if items is None:
+        items = "p2p" if interaction.channel_id == CHANNELS["p2p"] else "f2p"
     rows = market.flips(b.mapping, b.latest, b.h1, b.d1, cash=c, slots=slots, max_hours=float(speed),
-                        min_profit=mp, f2p=f2p, max_risk=risk, min_margin=min_margin,
-                        min_roi=min_roi / 100)[:10]
-    e = flips_embed(rows, f"Flips for {n(c)} over {slots} slot(s)")
+                        min_profit=mp, f2p=items == "f2p", max_risk=risk, min_margin=min_margin,
+                        min_roi=min_roi / 100, members_only=items == "p2p")[:10]
+    label = {"f2p": "F2P", "p2p": "Members", "all": "All"}[items]
+    e = flips_embed(rows, f"{label} flips for {n(c)} over {slots} slot(s)")
     e.set_footer(text=f"At least {min_margin} gp and {min_roi:g}% profit per item. Fill times assume you catch a quarter of the hourly volume.")
     await interaction.response.send_message(embed=e)
 
