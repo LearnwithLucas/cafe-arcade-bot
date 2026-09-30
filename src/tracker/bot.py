@@ -79,7 +79,7 @@ class Tracker(commands.Bot):
             for lang, handles in config.DEFAULT_TIKTOK_COMPETITORS.items():
                 for h in handles:
                     await self.store.run("INSERT OR IGNORE INTO watchlist VALUES (?,?,?)", ("tiktok", h, lang))
-        for cmd in (stats_cmd, video_cmd, trends_cmd, ideas_cmd, tiktok_cmd, queue_cmd, pc_cmd, brief_cmd, help_cmd):
+        for cmd in (stats_cmd, video_cmd, trends_cmd, ideas_cmd, tiktok_cmd, queue_cmd, clearqueue_cmd, pc_cmd, brief_cmd, help_cmd):
             self.tree.add_command(cmd)
         self.tree.add_command(watch_group)
         guild = discord.Object(id=config.GUILD_ID)
@@ -544,6 +544,26 @@ async def queue_cmd(i: discord.Interaction) -> None:
     await i.response.send_message(text, ephemeral=True)
 
 
+@app_commands.command(name="clearqueue", description="Cancel waiting jobs and tidy up finished job messages in bot-status")
+async def clearqueue_cmd(i: discord.Interaction) -> None:
+    b = bot_of(i)
+    await i.response.defer(ephemeral=True)
+    cancelled = removed = 0
+    for j in await b.recent_jobs():
+        try:
+            if j["status"] in ("queued", "running"):
+                # The PC agent only starts jobs marked queued, so this stops anything still waiting.
+                await j["msg"].edit(content=f"JOB|{j['id']}|{j['kind']}|{j['arg']}|cancelled\nCancelled with /clearqueue.")
+                cancelled += 1
+            else:
+                await j["msg"].delete()
+                removed += 1
+        except discord.HTTPException:
+            log.warning("Could not tidy job message %s", j["id"])
+    note = " A job that was already running on your PC finishes its current step first." if cancelled else ""
+    await i.followup.send(f"Cancelled {cancelled} waiting job(s) and removed {removed} finished job message(s).{note}", ephemeral=True)
+
+
 @app_commands.command(name="pc", description="Is the Grabber agent on your PC connected?")
 async def pc_cmd(i: discord.Interaction) -> None:
     await i.response.send_message((await bot_of(i).pc_status())["text"], ephemeral=True)
@@ -567,7 +587,7 @@ async def help_cmd(i: discord.Interaction) -> None:
         "**Commands**\n"
         "/stats, /video link, /brief\n"
         "/watchlist add, remove, list\n"
-        "/trends, /ideas, /tiktok [handle], /queue, /pc"))
+        "/trends, /ideas, /tiktok [handle], /queue, /clearqueue, /pc"))
     await i.response.send_message(embed=e, ephemeral=True)
 
 
