@@ -75,6 +75,7 @@ def guide_text(kind: str, dump_pct: int) -> tuple[str, str]:
                     "**Commands**\n"
                     "/price item: live prices, margin after tax and the 7-day average.\n"
                     "/flips cash: the best flips for your cash, slots and patience.\n"
+                    "/alch: the best items to high alch right now.\n"
                     "/dumps: items well under their weekly average.\n"
                     "/skill skill level: profit per XP at your level.\n"
                     "/watch add: get pinged here when an item crosses your price.\n\n"
@@ -133,7 +134,7 @@ class TradingCow(commands.Bot):
         await self.store.connect()
         await self.refresh_prices(force=True)
         self.tree.add_command(watch_group)
-        for cmd in (price_cmd, flips_cmd, dumps_cmd, skill_cmd, channel_cmd, channels_cmd, guide_cmd, help_cmd):
+        for cmd in (price_cmd, flips_cmd, alch_cmd, dumps_cmd, skill_cmd, channel_cmd, channels_cmd, guide_cmd, help_cmd):
             self.tree.add_command(cmd)
         if self.guild_ids:
             for gid in self.guild_ids:
@@ -477,6 +478,36 @@ async def flips_cmd(interaction: discord.Interaction, cash: str, slots: app_comm
     await interaction.response.send_message(embed=e)
 
 
+@app_commands.command(name="alch", description="Best items to buy and high alch right now")
+@app_commands.describe(items="F2P, members or all items (default: members in the P2P channel, F2P elsewhere)",
+                       buy="Buy instantly (default) or with a patient offer")
+@app_commands.choices(items=[app_commands.Choice(name="F2P items", value="f2p"),
+                             app_commands.Choice(name="Members items", value="p2p"),
+                             app_commands.Choice(name="All items", value="all")],
+                      buy=[app_commands.Choice(name="Instantly", value="instant"),
+                           app_commands.Choice(name="Patient offer", value="patient")])
+async def alch_cmd(interaction: discord.Interaction, items: str | None = None, buy: str = "instant") -> None:
+    b = bot_of(interaction)
+    if items is None:
+        p2p = await b.channel("p2p")
+        items = "p2p" if p2p and interaction.channel_id == p2p.id else "f2p"
+    rows = market.alchs(b.mapping, b.latest, b.h1, b.d1, f2p=items == "f2p", members_only=items == "p2p",
+                        instant=buy == "instant")[:10]
+    label = {"f2p": "F2P", "p2p": "Members", "all": "All"}[items]
+    e = discord.Embed(title=f"{label} high alchs right now", color=COLOR)
+    if not rows:
+        e.description = "Nothing makes a profit after the nature rune right now."
+    for a in rows:
+        limit = f"limit {n(a.limit)} per 4h" if a.limit else "no known limit"
+        e.add_field(name=f"{a.name}: {signed(a.profit)} each",
+                    value=f"Buy at {n(a.buy)}, alchs for {n(a.alch)}. About {n(a.per_hour)} casts/h, "
+                          f"**{signed(a.profit_hour)}/h**. {limit.capitalize()}.", inline=False)
+    nature = rows[0].nature if rows else None
+    e.set_footer(text=(f"Profit is after one nature rune ({n(nature)} gp). " if nature else "")
+                 + "Casts per hour are capped by 1,200 casts, the buy limit and a quarter of the hourly volume. Needs 55 Magic.")
+    await interaction.response.send_message(embed=e)
+
+
 @app_commands.command(name="dumps", description="Items trading well under their average (weekly by default)")
 @app_commands.describe(days="Baseline length in days (1 to 7)", min_drop="Minimum drop in %", f2p="F2P items only",
                        min_volume="Last hour's selling vs normal, e.g. 1.5 = 50% more than usual")
@@ -627,6 +658,7 @@ async def help_cmd(interaction: discord.Interaction) -> None:
     e = discord.Embed(title="TradingCow", color=COLOR, description=(
         "/price item: live prices, margin after tax, 7-day average\n"
         "/flips cash: best flips for your cash, slots and patience\n"
+        "/alch: best items to high alch right now\n"
         "/dumps: items well under their weekly average\n"
         "/skill skill level: profit per XP at your level\n"
         "/watch add, list, remove: price alerts (posted in the general channel)\n"

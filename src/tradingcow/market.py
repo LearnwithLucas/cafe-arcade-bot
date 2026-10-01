@@ -125,6 +125,58 @@ class Flip:
     score: float
 
 
+NATURE_RUNE_ID = 561
+ALCHS_PER_HOUR = 1200   # about the most a player casts in an hour
+
+
+@dataclass
+class Alch:
+    item_id: int
+    name: str
+    buy: int            # price paid per item
+    alch: int           # high alch value
+    nature: int         # nature rune price
+    profit: float       # per cast, after the nature rune
+    per_hour: float     # casts per hour we can supply (buy limit and volume)
+    limit: int
+
+    @property
+    def profit_hour(self) -> float:
+        return self.profit * self.per_hour
+
+
+def alchs(mapping: dict, latest: dict, h1: dict, d1: dict, *, f2p: bool, members_only: bool = False,
+          instant: bool = True, min_profit: int = 1) -> list[Alch]:
+    """Best items to buy and high alch. Instant buys at the insta-buy price; patient buys near the insta-sell price."""
+    nat = latest.get(str(NATURE_RUNE_ID)) or latest.get(NATURE_RUNE_ID) or {}
+    nature = nat.get("high") or nat.get("low") or 0
+    if not nature:
+        return []
+    out = []
+    for iid, m in mapping.items():
+        ha = m.get("highalch") or 0
+        if not ha or (f2p and m.get("members")) or (members_only and not m.get("members")):
+            continue
+        L = latest.get(str(iid)) or latest.get(iid) or {}
+        buy = L.get("high") if instant else (L.get("low") or L.get("high"))
+        if not buy:
+            continue
+        profit = ha - buy - nature
+        if profit < min_profit:
+            continue
+        vb, vs = volumes(iid, h1, d1)
+        supply = (vs if instant else vb) * SHARE        # hourly trades we can realistically catch
+        limit = m.get("limit") or 0
+        caps = [ALCHS_PER_HOUR, supply]
+        if limit:
+            caps.append(limit / LIMIT_HOURS)
+        per_hour = max(0.0, min(caps))
+        if per_hour < 1:
+            continue
+        out.append(Alch(iid, m["name"], int(buy), int(ha), int(nature), profit, per_hour, int(limit)))
+    return sorted(out, key=lambda a: a.profit_hour, reverse=True)
+
+
 def flips(mapping: dict, latest: dict, h1: dict, d1: dict, *, cash: int, slots: int, max_hours: float,
           min_profit: int, f2p: bool, max_risk: str, min_margin: int = 5, min_roi: float = 0.01, members_only: bool = False) -> list[Flip]:
     """Best patient flips: buy near the instant-sell price, sell near the instant-buy price.
