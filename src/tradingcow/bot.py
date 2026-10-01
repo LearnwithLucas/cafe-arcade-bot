@@ -9,7 +9,9 @@ import logging
 import os
 import re
 import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -33,6 +35,51 @@ CHANNELS = {
 }
 BOARD_CASH = int(os.getenv("TRADINGCOW_BOARD_CASH", "10000000"))
 BOARD_MIN_PROFIT = int(os.getenv("TRADINGCOW_BOARD_MIN_PROFIT", "10000"))
+GUIDE_HOUR = int(os.getenv("TRADINGCOW_GUIDE_HOUR", "10"))  # local time in Amsterdam
+TZ = ZoneInfo("Europe/Amsterdam")
+
+
+def guide_text(kind: str, dump_pct: int) -> tuple[str, str]:
+    """Title and text of the daily explainer for one channel kind."""
+    cash = n(BOARD_CASH / 1e6)
+    profit = n(BOARD_MIN_PROFIT / 1e3)
+    return {
+        "dumps": ("About this channel: sudden dumps",
+                  f"TradingCow posts here when an item suddenly trades at least {dump_pct}% under its 7-day average, "
+                  "while it was still normal 24 hours ago.\n\n"
+                  "**How to read a post**\n"
+                  "Now vs 7-day avg: how far the price fell.\n"
+                  "Last hour and sell volume: how fast it is falling and how many people are selling.\n"
+                  "Back to average: what you make per item, after the 2% GE tax, if the price recovers.\n"
+                  "Limit: the GE buy limit every 4 hours.\n\n"
+                  "A dump can keep falling (game update, bot ban wave, item change). Check the news and the chart before you buy. "
+                  "Each item posts at most once a day. Use /dumps for the full weekly list."),
+        "f2p": ("About this channel: F2P flips",
+                f"The live board above shows the best free-to-play flips for one GE slot and up to {cash}m, "
+                f"each making at least {profit}k and likely to fill within about 6 hours. It refreshes every 10 minutes.\n\n"
+                "**How to read a flip**\n"
+                "Buy at the first price, sell at the second. Profit is after the 2% GE tax.\n"
+                "Fill: about how long buying and selling take at that size.\n"
+                "Risk: low, medium or high, based on how steady the price and volume are.\n\n"
+                "Use /flips here with your own cash, free slots and patience. It defaults to F2P items in this channel."),
+        "p2p": ("About this channel: members flips",
+                f"The live board above shows the best members-only flips for one GE slot and up to {cash}m, "
+                f"each making at least {profit}k and likely to fill within about 6 hours. It refreshes every 10 minutes.\n\n"
+                "**How to read a flip**\n"
+                "Buy at the first price, sell at the second. Profit is after the 2% GE tax.\n"
+                "Fill: about how long buying and selling take at that size.\n"
+                "Risk: low, medium or high, based on how steady the price and volume are.\n\n"
+                "Use /flips here with your own cash, free slots and patience. It defaults to members items in this channel."),
+        "general": ("About TradingCow",
+                    "TradingCow tracks Grand Exchange prices from the OSRS Wiki and never touches your account.\n\n"
+                    "**Commands**\n"
+                    "/price item: live prices, margin after tax and the 7-day average.\n"
+                    "/flips cash: the best flips for your cash, slots and patience.\n"
+                    "/dumps: items well under their weekly average.\n"
+                    "/skill skill level: profit per XP at your level.\n"
+                    "/watch add: get pinged here when an item crosses your price.\n\n"
+                    "Sudden dumps, F2P flips and members flips each have their own channel."),
+    }[kind]
 
 
 def n(v) -> str:
@@ -86,7 +133,7 @@ class TradingCow(commands.Bot):
         await self.store.connect()
         await self.refresh_prices(force=True)
         self.tree.add_command(watch_group)
-        for cmd in (price_cmd, flips_cmd, dumps_cmd, skill_cmd, channel_cmd, channels_cmd, help_cmd):
+        for cmd in (price_cmd, flips_cmd, dumps_cmd, skill_cmd, channel_cmd, channels_cmd, guide_cmd, help_cmd):
             self.tree.add_command(cmd)
         if self.guild_ids:
             for gid in self.guild_ids:
@@ -101,10 +148,11 @@ class TradingCow(commands.Bot):
         self.hour_loop.start()
         self.dump_loop.start()
         self.board_loop.start()
+        self.guide_loop.start()
         self.backfill_task = asyncio.create_task(self.backfill())
 
     async def close(self) -> None:
-        for loop in (self.price_loop, self.hour_loop, self.dump_loop, self.board_loop):
+        for loop in (self.price_loop, self.hour_loop, self.dump_loop, self.board_loop, self.guide_loop):
             loop.cancel()
         if self.backfill_task:
             self.backfill_task.cancel()
@@ -213,10 +261,50 @@ class TradingCow(commands.Bot):
             except Exception:
                 log.exception("TradingCow %s board update failed", kind)
 
+    @tasks.loop(minutes=15)
+    async def guide_loop(self) -> None:
+        """Once a day (and right away if a channel has none yet), repost the explainer at the bottom of each channel."""
+        now = datetime.now(TZ)
+        last = float(await self.store.get("guide:last", "0") or 0)
+        first_run = not await self.store.get("guide:posted")
+        if first_run or (now.hour == GUIDE_HOUR and time.time() - last > 20 * HOUR):
+            await self.post_guides()
+
+    async def post_guides(self) -> int:
+        """Delete yesterday's explainer and post a fresh one, so it sits at the bottom. Returns the channels done."""
+        by_channel: dict[int, tuple] = {}
+        for kind in ("dumps", "f2p", "p2p", "general"):
+            ch = await self.channel(kind)
+            if ch:
+                by_channel.setdefault(ch.id, (ch, []))[1].append(kind)
+        done = 0
+        for cid, (ch, kinds) in by_channel.items():
+            try:
+                old = await self.store.get(f"guide:msg:{cid}")
+                if old:
+                    try:
+                        await (await ch.fetch_message(int(old))).delete()
+                    except discord.HTTPException:
+                        pass
+                embeds = []
+                for kind in kinds:
+                    title, text = guide_text(kind, round(self.dump_min_drop * 100))
+                    embeds.append(discord.Embed(title=title, description=text, color=COLOR))
+                embeds[-1].set_footer(text="This explainer is reposted once a day.")
+                msg = await ch.send(embeds=embeds)
+                await self.store.set(f"guide:msg:{cid}", str(msg.id))
+                done += 1
+            except Exception:
+                log.exception("TradingCow guide post failed in %s", cid)
+        await self.store.set("guide:last", str(time.time()))
+        await self.store.set("guide:posted", "1")
+        return done
+
     @price_loop.before_loop
     @hour_loop.before_loop
     @dump_loop.before_loop
     @board_loop.before_loop
+    @guide_loop.before_loop
     async def _wait(self) -> None:
         await self.wait_until_ready()
 
@@ -523,6 +611,17 @@ async def channels_cmd(interaction: discord.Interaction) -> None:
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
+@app_commands.command(name="tc_guide", description="Repost the explainer in every TradingCow channel now")
+async def guide_cmd(interaction: discord.Interaction) -> None:
+    if not can_configure(interaction):
+        await interaction.response.send_message("Only TradingCow admins can do this.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    done = await bot_of(interaction).post_guides()
+    await interaction.followup.send(f"Reposted the explainer in {done} channel(s). It also reposts by itself every day at {GUIDE_HOUR}:00.",
+                                    ephemeral=True)
+
+
 @app_commands.command(name="tc_help", description="What TradingCow can do")
 async def help_cmd(interaction: discord.Interaction) -> None:
     e = discord.Embed(title="TradingCow", color=COLOR, description=(
@@ -531,7 +630,8 @@ async def help_cmd(interaction: discord.Interaction) -> None:
         "/dumps: items well under their weekly average\n"
         "/skill skill level: profit per XP at your level\n"
         "/watch add, list, remove: price alerts (posted in the general channel)\n"
-        "/tc_channel, /tc_channels: where automatic posts go\n\n"
+        "/tc_channel, /tc_channels: where automatic posts go\n"
+        "/tc_guide: repost the channel explainers now\n\n"
         "Prices come from the OSRS Wiki. The bot never touches your account."))
     await interaction.response.send_message(embed=e, ephemeral=True)
 
