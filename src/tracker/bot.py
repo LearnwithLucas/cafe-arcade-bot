@@ -79,7 +79,8 @@ class Tracker(commands.Bot):
             for lang, handles in config.DEFAULT_TIKTOK_COMPETITORS.items():
                 for h in handles:
                     await self.store.run("INSERT OR IGNORE INTO watchlist VALUES (?,?,?)", ("tiktok", h, lang))
-        for cmd in (stats_cmd, video_cmd, trends_cmd, ideas_cmd, tiktok_cmd, queue_cmd, clearqueue_cmd, pc_cmd, brief_cmd, help_cmd):
+        for cmd in (stats_cmd, video_cmd, shorts_cmd, social_cmd, trends_cmd, ideas_cmd, tiktok_cmd, queue_cmd, clearqueue_cmd,
+                    pc_cmd, brief_cmd, help_cmd):
             self.tree.add_command(cmd)
         self.tree.add_command(watch_group)
         guild = discord.Object(id=config.GUILD_ID)
@@ -282,6 +283,19 @@ class Tracker(commands.Bot):
             await self.post("alerts", content=f"{'Outlier' if b == 'outlier' else 'Flop'} at {name}: **{v['title']}**, "
                                               f"{n(views)} views vs usual {n(base)} ({ratio:.2f}x). https://youtu.be/{v['video_id']}")
 
+    async def top_shorts(self, own_key: str, days: int = 7) -> list[dict]:
+        """Your Shorts published in the last N days, most viewed first, with their latest numbers."""
+        now = int(time.time())
+        rows = await self.store.rows(
+            "SELECT v.* FROM videos v JOIN channels c ON c.channel_id=v.channel_id "
+            "WHERE c.own_key=? AND v.is_short=1 AND v.published>=?", (own_key, now - days * DAY))
+        out = []
+        for v in rows:
+            s = await self.store.one("SELECT views, likes, comments FROM snapshots WHERE video_id=? ORDER BY ts DESC LIMIT 1", (v["video_id"],))
+            if s:
+                out.append({**v, **s, "per_hour": s["views"] / max(1, (now - v["published"]) / HOUR)})
+        return sorted(out, key=lambda r: r["views"], reverse=True)
+
     # ------------------------------------------------------------ daily brief
     @tasks.loop(minutes=5)
     async def brief_loop(self) -> None:
@@ -296,6 +310,8 @@ class Tracker(commands.Bot):
             await self.post("daily_brief", embed=await self.build_brief())
         except Exception:
             log.exception("Daily brief failed")
+        # Ask the PC for the TikTok and Instagram week; it runs whenever Grabber is next open.
+        await self.queue_job("social7d")
 
     @yt_loop.before_loop
     @brief_loop.before_loop
@@ -335,6 +351,10 @@ class Tracker(commands.Bot):
                 lines.append(f"[{v['title'][:60]}](https://youtu.be/{v['video_id']}): {n(snap['views'] if snap else None)} views{tag}")
             if not week:
                 lines.append("No uploads in the last 7 days.")
+            shorts = await self.top_shorts(c["own_key"])
+            if shorts:
+                lines.append("**Top Shorts, 7 days:** " + "; ".join(
+                    f"[{r['title'][:40]}](https://youtu.be/{r['video_id']}) {n(r['views'])}" for r in shorts[:3]))
             e.add_field(name=c["title"], value="\n".join(lines)[:1024] or "-", inline=False)
         comp = await self.store.rows(
             "SELECT v.*, c.title AS ct FROM videos v JOIN channels c ON c.channel_id=v.channel_id "
@@ -537,6 +557,39 @@ async def tiktok_cmd(i: discord.Interaction, handle: str | None = None) -> None:
     await i.response.send_message(f"Queued as job #{jid}. Scans take a few minutes per account; reports land in the tiktok channel.", ephemeral=True)
 
 
+@app_commands.command(name="shorts", description="Your YouTube Shorts from the last 7 days, most viewed first")
+@app_commands.choices(channel=[app_commands.Choice(name="English", value="en"), app_commands.Choice(name="Dutch", value="nl"),
+                               app_commands.Choice(name="Both", value="both")])
+async def shorts_cmd(i: discord.Interaction, channel: str = "both", days: app_commands.Range[int, 1, 30] = 7) -> None:
+    b = bot_of(i)
+    await i.response.defer()
+    embeds = []
+    for key in (["en", "nl"] if channel == "both" else [channel]):
+        c = await b.store.one("SELECT * FROM channels WHERE own_key=?", (key,))
+        if not c:
+            continue
+        rows = await b.top_shorts(key, days)
+        e = discord.Embed(title=f"{c['title']}: Shorts, last {days} days", color=COLOR)
+        if not rows:
+            e.description = "No Shorts in this period."
+        else:
+            total = sum(r["views"] for r in rows)
+            e.description = f"{len(rows)} Shorts, {n(total)} views in total, median {n(statistics.median(r['views'] for r in rows))}."
+            e.add_field(name="Most viewed", inline=False, value="\n".join(
+                f"{k}. [{r['title'][:60]}](https://youtu.be/{r['video_id']}): {n(r['views'])} views "
+                f"({n(r['per_hour'])}/h), {n(r['likes'])} likes, {n(r['comments'])} comments, <t:{r['published']}:R>"
+                for k, r in enumerate(rows[:10], 1))[:1024])
+        embeds.append(e)
+    await i.followup.send(embeds=embeds or [discord.Embed(description="No channel data yet.")])
+
+
+@app_commands.command(name="social", description="Ask your PC for the last 7 days on your TikTok and Instagram accounts")
+async def social_cmd(i: discord.Interaction) -> None:
+    jid = await bot_of(i).queue_job("social7d")
+    await i.response.send_message(f"Queued as job #{jid}. Your PC refreshes your TikTok numbers first, so give it a few minutes. "
+                                  "Results land in the tiktok channel.", ephemeral=True)
+
+
 @app_commands.command(name="queue", description="Jobs waiting for or running on your PC")
 async def queue_cmd(i: discord.Interaction) -> None:
     jobs = await bot_of(i).recent_jobs()
@@ -585,7 +638,8 @@ async def help_cmd(i: discord.Interaction) -> None:
         "Outliers and flops (alerts). Competitor uploads and outliers (competitors). Daily brief at 08:00.\n"
         "Trends brief, video ideas and TikTok reports when your PC runs Grabber.\n\n"
         "**Commands**\n"
-        "/stats, /video link, /brief\n"
+        "/stats, /video link, /shorts, /brief\n"
+        "/social: last 7 days on TikTok and Instagram (runs on your PC)\n"
         "/watchlist add, remove, list\n"
         "/trends, /ideas, /tiktok [handle], /queue, /clearqueue, /pc"))
     await i.response.send_message(embed=e, ephemeral=True)
