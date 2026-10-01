@@ -71,6 +71,17 @@ def kind_of(is_short: int, code: str | None) -> str:
     return "long"
 
 
+# Automatic codes for YouTube, used when there is no /tag and no "code:" line. Words match the title or a playlist name.
+# Change them in Discord with /coderule. Anything that matches nothing gets S1 (Short) or G1 (other long video).
+DEFAULT_CODE_RULES = [
+    ("T1", "out loud|hardop|oefen|practi[cs]e \\d+ questions|\\d+ vragen"),   # weekly-topic practice episode
+    ("M1", "mistake|fout|wrong|stop saying|niet of geen|fixed"),                  # one mistake fixed
+    ("P1", "langzaam nederlands|podcast|praten over"),                           # podcast
+    ("C1", "speak with confidence|confiden|freeze|nervous|fear|afraid"),         # confidence and fear
+    ("Q1", "level|niveau"),                                                      # level checks
+]
+FALLBACK_CODES = {1: "S1", 0: "G1"}
+
 KIND_LABEL = {"short": "Short", "topic": "Weekly-topic video", "long": "Long video"}
 
 

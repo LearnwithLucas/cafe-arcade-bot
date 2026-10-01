@@ -72,6 +72,38 @@ class YouTube:
         j = await self._get("playlistItems", part="contentDetails", playlistId=uploads_playlist, maxResults=min(50, limit))
         return [it["contentDetails"]["videoId"] for it in j.get("items", [])]
 
+    async def channel_playlists(self, channel_id: str) -> list[tuple[str, str]]:
+        """(playlist id, title) for every public playlist of a channel."""
+        out, token = [], None
+        for _ in range(10):
+            params = {"part": "snippet", "channelId": channel_id, "maxResults": 50}
+            if token:
+                params["pageToken"] = token
+            j = await self._get("playlists", **params)
+            out += [(it["id"], it["snippet"]["title"]) for it in j.get("items", [])]
+            token = j.get("nextPageToken")
+            if not token:
+                break
+        return out
+
+    async def playlist_video_ids(self, playlist_id: str, limit: int = 500) -> list[str]:
+        out, token = [], None
+        while len(out) < limit:
+            params = {"part": "contentDetails", "playlistId": playlist_id, "maxResults": 50}
+            if token:
+                params["pageToken"] = token
+            j = await self._get("playlistItems", **params)
+            out += [it["contentDetails"]["videoId"] for it in j.get("items", [])]
+            token = j.get("nextPageToken")
+            if not token:
+                break
+        return out
+
+    async def search_channels(self, query: str, limit: int = 3) -> list[dict]:
+        """Channel search (costs 100 quota units, so only used once per competitor)."""
+        j = await self._get("search", part="snippet", q=query, type="channel", maxResults=limit)
+        return j.get("items", [])
+
     async def videos(self, ids: list[str]) -> list[dict]:
         out = []
         for i in range(0, len(ids), 50):

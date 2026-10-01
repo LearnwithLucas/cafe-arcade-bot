@@ -76,8 +76,11 @@ def kind_label(v: dict) -> str:
     return KIND_LABEL.get(v.get("kind") or kind_of(v.get("is_short", 0), v.get("code")), "Video")
 
 
-def code_text(code: str | None) -> str:
-    return f"`{code}`" if code else "`no code`"
+def code_text(code: str | None, src: str | None = None) -> str:
+    """`D1`, or `D1*` when Tracker picked the code itself."""
+    if not code:
+        return "`no code`"
+    return f"`{code}*`" if src == "auto" else f"`{code}`"
 
 
 def post_ref(link: str) -> tuple[str, str] | None:
@@ -116,7 +119,8 @@ class Tracker(commands.Bot):
     # ------------------------------------------------------------ lifecycle
     async def setup_hook(self) -> None:
         await self.store.connect()
-        if not await self.store.one("SELECT 1 AS x FROM watchlist LIMIT 1"):
+        if not await self.store.get("watch_seeded_v2"):
+            await self.store.set("watch_seeded_v2", 1)
             for lang, handles in config.DEFAULT_TIKTOK_COMPETITORS.items():
                 for h in handles:
                     await self.store.run("INSERT OR IGNORE INTO watchlist VALUES (?,?,?)", ("tiktok", h, lang))
@@ -125,6 +129,7 @@ class Tracker(commands.Bot):
                     pc_cmd, report_cmd, tag_cmd, change_cmd, help_cmd):
             self.tree.add_command(cmd)
         self.tree.add_command(watch_group)
+        self.tree.add_command(rule_group)
         guild = discord.Object(id=config.GUILD_ID)
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
@@ -189,6 +194,7 @@ class Tracker(commands.Bot):
         if not self.yt.enabled:
             return
         try:
+            await self.auto_watch_youtube()
             await self.ensure_channels()
             for c in await self.store.rows("SELECT * FROM channels"):
                 await self.sync_channel(c)
@@ -215,30 +221,129 @@ class Tracker(commands.Bot):
         now = int(time.time())
         for v in await self.yt.videos(new_ids):
             dur = iso_duration_seconds(v["contentDetails"].get("duration", ""))
-            code = await self.code_for("yt", v["id"], v["snippet"].get("description")) if own else None
-            await self.store.run("INSERT OR IGNORE INTO videos(video_id, channel_id, title, published, duration, is_short, announced, code, kind) "
-                                 "VALUES (?,?,?,?,?,?,?,?,?)",
+            desc_code = parse_code(v["snippet"].get("description")) if own else None
+            await self.store.run("INSERT OR IGNORE INTO videos(video_id, channel_id, title, published, duration, is_short, announced, desc_code) "
+                                 "VALUES (?,?,?,?,?,?,?,?)",
                                  (v["id"], c["channel_id"], v["snippet"]["title"], parse_ts(v["snippet"]["publishedAt"]),
-                                  dur, int(dur <= 180), 0 if known_before else 1, code, kind_of(int(dur <= 180), code)))
+                                  dur, int(dur <= 180), 0 if known_before else 1, desc_code))
         # Fresh numbers for everything published in the last 35 days.
         recent = await self.store.rows("SELECT * FROM videos WHERE channel_id=? AND published>=?", (c["channel_id"], now - 35 * DAY))
         for v in await self.yt.videos([r["video_id"] for r in recent]):
             if own:  # pick up a code added to the description later
-                code = await self.code_for("yt", v["id"], v["snippet"].get("description"))
-                dur = iso_duration_seconds(v["contentDetails"].get("duration", ""))
-                await self.store.run("UPDATE videos SET title=?, code=?, kind=? WHERE video_id=?",
-                                     (v["snippet"]["title"], code, kind_of(int(dur <= 180), code), v["id"]))
+                await self.store.run("UPDATE videos SET title=?, desc_code=? WHERE video_id=?",
+                                     (v["snippet"]["title"], parse_code(v["snippet"].get("description")), v["id"]))
             s = v.get("statistics", {})
             await self.store.snapshot(v["id"], int(s.get("viewCount", 0) or 0), int(s.get("likeCount", 0) or 0),
                                       int(s.get("commentCount", 0) or 0))
+        if own:
+            await self.refresh_playlists(c)
+            await self.recode(c["channel_id"])
         for r in await self.store.rows("SELECT * FROM videos WHERE channel_id=? AND announced=0", (c["channel_id"],)):
             await self.announce(c, r)
             await self.store.run("UPDATE videos SET announced=1 WHERE video_id=?", (r["video_id"],))
 
-    async def code_for(self, platform: str, post_id: str, text: str | None) -> str | None:
-        """A code set with /tag wins, else the "code: X" line in the description."""
-        t = await self.store.one("SELECT code FROM tags WHERE platform=? AND post_id=?", (platform, post_id))
-        return t["code"] if t else parse_code(text)
+    # ------------------------------------------------------------ codes
+    async def code_rules(self) -> list[tuple[str, str]]:
+        if not await self.store.get("code_rules_seeded"):
+            for pos, (code, pattern) in enumerate(config.DEFAULT_CODE_RULES):
+                await self.store.run("INSERT OR IGNORE INTO code_rules VALUES (?,?,?)", (pos, code, pattern))
+            await self.store.set("code_rules_seeded", 1)
+        return [(r["code"], r["pattern"]) for r in await self.store.rows("SELECT * FROM code_rules ORDER BY pos")]
+
+    async def refresh_playlists(self, c: dict) -> None:
+        """Which playlists each of your videos is in (every 6 hours), so playlist names can pick the code."""
+        key = f"playlists_at:{c['channel_id']}"
+        if time.time() - float(await self.store.get(key, 0) or 0) < 6 * HOUR:
+            return
+        try:
+            pairs = []
+            for pid, title in await self.yt.channel_playlists(c["channel_id"]):
+                pairs += [(vid, title) for vid in await self.yt.playlist_video_ids(pid)]
+        except Exception:
+            log.warning("Playlist refresh failed for %s", c["channel_id"], exc_info=True)
+            return
+        await self.store.run("DELETE FROM video_playlists WHERE video_id IN (SELECT video_id FROM videos WHERE channel_id=?)", (c["channel_id"],))
+        for vid, title in pairs:
+            await self.store.run("INSERT OR IGNORE INTO video_playlists VALUES (?,?)", (vid, title))
+        await self.store.set(key, time.time())
+
+    async def auto_code(self, v: dict, rules: list[tuple[str, str]]) -> str:
+        lists = [r["playlist"] for r in await self.store.rows("SELECT playlist FROM video_playlists WHERE video_id=?", (v["video_id"],))]
+        text = " | ".join([v["title"] or ""] + lists)
+        for code, pattern in rules:
+            try:
+                if re.search(pattern, text, re.I):
+                    return code
+            except re.error:
+                continue
+        return config.FALLBACK_CODES[1 if v["is_short"] else 0]
+
+    async def recode(self, channel_id: str | None = None) -> None:
+        """Code for every own video: /tag first, then the "code:" line in the description, then the automatic rules."""
+        rules = await self.code_rules()
+        sql = "SELECT v.* FROM videos v JOIN channels c ON c.channel_id=v.channel_id WHERE c.own_key IS NOT NULL"
+        args: tuple = ()
+        if channel_id:
+            sql += " AND v.channel_id=?"
+            args = (channel_id,)
+        for v in await self.store.rows(sql, args):
+            t = await self.store.one("SELECT code FROM tags WHERE platform='yt' AND post_id=?", (v["video_id"],))
+            if t:
+                code, src = t["code"], "tag"
+            elif v.get("desc_code"):
+                code, src = v["desc_code"], "desc"
+            else:
+                code, src = await self.auto_code(v, rules), "auto"
+            kind = kind_of(v["is_short"], code)
+            if (code, src, kind) != (v.get("code"), v.get("code_src"), v.get("kind")):
+                await self.store.run("UPDATE videos SET code=?, code_src=?, kind=? WHERE video_id=?", (code, src, kind, v["video_id"]))
+
+    # ------------------------------------------------------------ competitors on YouTube
+    async def auto_watch_youtube(self) -> None:
+        """Once: find the YouTube channel of every TikTok competitor on the watchlist and follow it too."""
+        if await self.store.get("auto_yt_watch_done"):
+            return
+        await self.store.set("auto_yt_watch_done", 1)
+        added, missing = [], []
+        have = {r["handle"].lower() for r in await self.store.rows("SELECT handle FROM watchlist WHERE kind='youtube'")}
+        for w in await self.store.rows("SELECT handle, lang FROM watchlist WHERE kind='tiktok' ORDER BY lang, handle"):
+            found = await self.find_youtube(w["handle"])
+            if not found:
+                missing.append(w["handle"])
+                continue
+            handle, title = found
+            if handle.lower() not in have:
+                await self.store.run("INSERT OR REPLACE INTO watchlist VALUES (?,?,?)", ("youtube", handle, w["lang"]))
+                have.add(handle.lower())
+                added.append(f"{title} ({handle})")
+        text = "**Watchlist:** I looked up your TikTok competitors on YouTube.\n"
+        text += ("Now following: " + ", ".join(added) + ".\n") if added else "No YouTube channels found.\n"
+        if missing:
+            text += "Not found on YouTube: " + ", ".join(missing) + ". Add them by hand with /watchlist add if they have one.\n"
+        text += "Wrong match? Remove it with /watchlist remove."
+        await self.post("competitors", content=text[:1900])
+
+    async def find_youtube(self, tiktok_handle: str) -> tuple[str, str] | None:
+        stem = re.sub(r"[^a-z0-9]", "", tiktok_handle.lower())
+        for cand in dict.fromkeys([tiktok_handle, tiktok_handle.replace(".", ""), tiktok_handle.replace("_", ""), stem]):
+            try:
+                c = await self.yt.channel("@" + cand)
+            except Exception:
+                c = None
+            if c:
+                return c["snippet"].get("customUrl") or "@" + cand, c["snippet"]["title"]
+        try:
+            for it in await self.yt.search_channels(tiktok_handle):
+                cid = it["snippet"]["channelId"]
+                c = await self.yt.channel(cid)
+                if not c:
+                    continue
+                names = re.sub(r"[^a-z0-9]", "", (c["snippet"].get("customUrl") or "").lower() + " " + c["snippet"]["title"].lower())
+                if stem and (stem in names or names.startswith(stem[:8])):
+                    return c["snippet"].get("customUrl") or cid, c["snippet"]["title"]
+        except Exception:
+            log.warning("YouTube search failed for %s", tiktok_handle, exc_info=True)
+        return None
 
     async def announce(self, c: dict, v: dict) -> None:
         """Your own uploads only. Competitor uploads go into the Monday competitor summary."""
@@ -247,7 +352,7 @@ class Tracker(commands.Bot):
         v = await self.store.one("SELECT * FROM videos WHERE video_id=?", (v["video_id"],)) or v
         note = "" if v.get("code") else " No code found: add a last line like `code: D1` to the description, or use /tag."
         e = discord.Embed(title=f"New upload: {v['title']}", url=f"https://youtu.be/{v['video_id']}", color=COLOR,
-                          description=f"{code_text(v.get('code'))} {kind_label(v)}, published <t:{v['published']}:R>. "
+                          description=f"{code_text(v.get('code'), v.get('code_src'))} {kind_label(v)}, published <t:{v['published']}:R>. "
                                       f"First look after 24 hours, first rating at 7 days.{note}")
         await self.post("yt_en" if c["own_key"] == "en" else "yt_nl", embed=e)
 
@@ -308,7 +413,7 @@ class Tracker(commands.Bot):
         """24 hours: views only, no rating. Subscriber numbers are not in Studio yet."""
         snap = await self.store.one("SELECT likes, comments FROM snapshots WHERE video_id=? ORDER BY ts DESC LIMIT 1", (v["video_id"],))
         e = discord.Embed(title=f"24h first look: {v['title']}", url=f"https://youtu.be/{v['video_id']}", color=COLOR,
-                          description=f"{code_text(v.get('code'))} {kind_label(v)}. No rating yet: it is rated on subscribers at 7 days, "
+                          description=f"{code_text(v.get('code'), v.get('code_src'))} {kind_label(v)}. No rating yet: it is rated on subscribers at 7 days, "
                                       f"once YouTube Studio has the numbers (about 10 days after upload).")
         e.add_field(name="Views", value=n(views))
         if snap:
@@ -372,7 +477,7 @@ class Tracker(commands.Bot):
         name, why = rate(r["subs"], await self.earlier_subs(v, win))
         days = dict(WINDOWS)[win]
         e = discord.Embed(title=f"{win} rating: {v['title']}", url=f"https://youtu.be/{v['video_id']}", color=COLOR,
-                          description=f"{code_text(v.get('code'))} {kind_label(v)}. **{name}**: {why}.")
+                          description=f"{code_text(v.get('code'), v.get('code_src'))} {kind_label(v)}. **{name}**: {why}.")
         e.add_field(name="Subscribers", value=n(r["subs"]))
         e.add_field(name="Views", value=n(r["views"]))
         e.add_field(name="Subs per 1,000 views", value=f"{r['subs'] / r['views'] * 1000:.1f}" if r["views"] else "-")
@@ -381,7 +486,7 @@ class Tracker(commands.Bot):
                           f"{days} days after publishing. Outlier 3.6x+, over 1.6x+, par 0.72x+, under 0.5x+, flop below.")
         await self.post("yt_en" if v["own_key"] == "en" else "yt_nl", embed=e)
         if name in ("outlier", "flop"):
-            await self.post("alerts", content=f"{name.capitalize()} at {win}: {code_text(v.get('code'))} **{v['title']}**, "
+            await self.post("alerts", content=f"{name.capitalize()} at {win}: {code_text(v.get('code'), v.get('code_src'))} **{v['title']}**, "
                                               f"{why}. https://youtu.be/{v['video_id']}")
 
     async def top_shorts(self, own_key: str, days: int = 7) -> list[dict]:
@@ -642,7 +747,7 @@ async def stats_cmd(i: discord.Interaction, channel: str) -> None:
                 tag = f", {n(st['subs'])} subs at {win} ({name})"
                 break
         letter = {"short": "S", "topic": "T", "long": "L"}.get(v.get("kind") or "", "L")
-        lines.append(f"{letter} {code_text(v.get('code'))} [{v['title'][:45]}](https://youtu.be/{v['video_id']}): {n(s['views'] if s else None)} views{tag}")
+        lines.append(f"{letter} {code_text(v.get('code'), v.get('code_src'))} [{v['title'][:45]}](https://youtu.be/{v['video_id']}): {n(s['views'] if s else None)} views{tag}")
     e.add_field(name="Latest videos (S = Short, T = weekly topic, L = other long)", value="\n".join(lines)[:1024] or "-", inline=False)
     if not b.yt.analytics_enabled(channel):
         e.set_footer(text="YouTube Studio is not connected for this channel, so there are no subscriber ratings.")
@@ -671,7 +776,7 @@ async def video_cmd(i: discord.Interaction, link: str) -> None:
     e.add_field(name="Comments", value=n(s.get("commentCount")))
     row = await b.store.one("SELECT v.*, c.own_key FROM videos v JOIN channels c ON c.channel_id=v.channel_id WHERE video_id=?", (vid,))
     if row and row["own_key"]:
-        e.description += f"\n{code_text(row.get('code'))} {kind_label(row)}"
+        e.description += f"\n{code_text(row.get('code'), row.get('code_src'))} {kind_label(row)}"
         for win, _ in WINDOWS:
             st, name, why = await b.rating_of(row, win)
             if st:
@@ -772,7 +877,7 @@ async def shorts_cmd(i: discord.Interaction, channel: str = "both", days: app_co
             total = sum(r["views"] for r in rows)
             e.description = f"{len(rows)} Shorts, {n(total)} views in total, median {n(statistics.median(r['views'] for r in rows))}."
             e.add_field(name="Most viewed", inline=False, value="\n".join(
-                f"{k}. {code_text(r.get('code'))} [{r['title'][:50]}](https://youtu.be/{r['video_id']}): {n(r['views'])} views "
+                f"{k}. {code_text(r.get('code'), r.get('code_src'))} [{r['title'][:50]}](https://youtu.be/{r['video_id']}): {n(r['views'])} views "
                 f"({n(r['per_hour'])}/h), {n(r['likes'])} likes, {n(r['comments'])} comments, <t:{r['published']}:R>"
                 for k, r in enumerate(rows[:10], 1))[:1024])
         embeds.append(e)
@@ -850,11 +955,51 @@ async def tag_cmd(i: discord.Interaction, link: str, code: str) -> None:
     platform, pid = ref
     await b.store.run("INSERT OR REPLACE INTO tags VALUES (?,?,?,?)", (platform, pid, code, int(time.time())))
     if platform == "yt":
-        row = await b.store.one("SELECT is_short FROM videos WHERE video_id=?", (pid,))
-        if row:
-            await b.store.run("UPDATE videos SET code=?, kind=? WHERE video_id=?", (code, kind_of(row["is_short"], code), pid))
+        await b.recode()
     where = {"yt": "YouTube", "tt": "TikTok", "ig": "Instagram"}[platform]
     await i.response.send_message(f"{where} post tagged `{code}`. A code you set here wins over the one in the description.", ephemeral=True)
+
+
+rule_group = app_commands.Group(name="coderule", description="Rules that give YouTube videos a code automatically")
+
+
+@rule_group.command(name="list", description="Show the automatic code rules")
+async def rule_list(i: discord.Interaction) -> None:
+    rules = await bot_of(i).code_rules()
+    text = "\n".join(f"{k}. `{c}`: {p.replace('|', ', ')}" for k, (c, p) in enumerate(rules, 1))
+    text += (f"\nNo match: `{config.FALLBACK_CODES[1]}` for Shorts, `{config.FALLBACK_CODES[0]}` for other videos."
+             "\nThe first rule with a word in the title or a playlist name wins. A `code:` line or /tag always beats these. "
+             "Codes starting with T count as weekly-topic videos.")
+    await i.response.send_message(text[:1900], ephemeral=True)
+
+
+@rule_group.command(name="add", description="Add or replace a rule: a code and the words that trigger it")
+@app_commands.describe(code="Like M2", words="Comma-separated words or phrases, like: past simple, present perfect",
+                       position="1 puts it first (it wins over the others); empty puts it last")
+async def rule_add(i: discord.Interaction, code: str, words: str, position: int | None = None) -> None:
+    b = bot_of(i)
+    code = code.strip().upper()
+    parts = [re.escape(w.strip()) for w in words.split(",") if w.strip()]
+    if not re.fullmatch(r"[A-Z]{1,3}[0-9]{1,3}", code) or not parts:
+        await i.response.send_message("I need a code like M2 and at least one word.", ephemeral=True)
+        return
+    rules = [r for r in await b.code_rules() if r[0] != code]
+    pos = len(rules) if position is None else max(0, min(len(rules), position - 1))
+    rules.insert(pos, (code, "|".join(parts)))
+    await b.store.run("DELETE FROM code_rules")
+    for k, (c, p) in enumerate(rules):
+        await b.store.run("INSERT INTO code_rules VALUES (?,?,?)", (k, c, p))
+    await b.recode()
+    await i.response.send_message(f"Rule {pos + 1}: `{code}` for {', '.join(w.strip() for w in words.split(',') if w.strip())}. "
+                                  "Codes on your videos are updated.", ephemeral=True)
+
+
+@rule_group.command(name="remove", description="Remove the rule for a code")
+async def rule_remove(i: discord.Interaction, code: str) -> None:
+    b = bot_of(i)
+    await b.store.run("DELETE FROM code_rules WHERE code=?", (code.strip().upper(),))
+    await b.recode()
+    await i.response.send_message(f"Removed the rule for `{code.strip().upper()}`.", ephemeral=True)
 
 
 @app_commands.command(name="change", description="Set this week's one change, or see it when left empty")
@@ -880,9 +1025,10 @@ async def help_cmd(i: discord.Interaction) -> None:
         "Competitor summary every Monday.\n"
         "Trends brief, video ideas and TikTok reports when your PC runs Grabber.\n\n"
         "**Codes**\n"
-        "End a description or caption with a line like `code: D1`. Codes starting with T count as weekly-topic videos.\n\n"
+        "Every post gets a code. A `code: D1` line in the description or /tag wins; otherwise Tracker picks one from the "
+        "title and playlist (shown with *, rules in /coderule list). Codes starting with T count as weekly-topic videos.\n\n"
         "**Commands**\n"
-        "/stats, /video link, /shorts, /report, /tag link code, /change text\n"
+        "/stats, /video link, /shorts, /report, /tag link code, /change text, /coderule\n"
         "/social: last 7 days on TikTok, /instagram: last 7 days on Instagram (both run on your PC)\n"
         "/watchlist add, remove, list\n"
         "/trends, /ideas, /tiktok [handle], /queue, /clearqueue, /pc"))

@@ -50,6 +50,12 @@ CREATE TABLE IF NOT EXISTS tags (           -- codes set by hand with /tag (plat
     platform TEXT, post_id TEXT, code TEXT, ts INTEGER,
     PRIMARY KEY (platform, post_id)
 );
+CREATE TABLE IF NOT EXISTS video_playlists (
+    video_id TEXT, playlist TEXT, PRIMARY KEY (video_id, playlist)
+);
+CREATE TABLE IF NOT EXISTS code_rules (     -- automatic codes: first rule whose words match the title or playlist wins
+    pos INTEGER, code TEXT PRIMARY KEY, pattern TEXT
+);
 CREATE TABLE IF NOT EXISTS changes (        -- the one change for each week, set with /change
     week TEXT PRIMARY KEY, text TEXT, ts INTEGER
 );
@@ -58,6 +64,8 @@ CREATE TABLE IF NOT EXISTS changes (        -- the one change for each week, set
 MIGRATIONS = [
     "ALTER TABLE videos ADD COLUMN code TEXT",
     "ALTER TABLE videos ADD COLUMN kind TEXT",
+    "ALTER TABLE videos ADD COLUMN desc_code TEXT",
+    "ALTER TABLE videos ADD COLUMN code_src TEXT",
 ]
 
 
