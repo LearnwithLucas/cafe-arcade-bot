@@ -244,10 +244,11 @@ class Tracker(commands.Bot):
 
     # ------------------------------------------------------------ codes
     async def code_rules(self) -> list[tuple[str, str]]:
-        if not await self.store.get("code_rules_seeded"):
+        if not await self.store.get("code_rules_seeded_v2"):  # v2: YouTube letters that don't clash with short-form codes
+            await self.store.run("DELETE FROM code_rules")
             for pos, (code, pattern) in enumerate(config.DEFAULT_CODE_RULES):
                 await self.store.run("INSERT OR IGNORE INTO code_rules VALUES (?,?,?)", (pos, code, pattern))
-            await self.store.set("code_rules_seeded", 1)
+            await self.store.set("code_rules_seeded_v2", 1)
         return [(r["code"], r["pattern"]) for r in await self.store.rows("SELECT * FROM code_rules ORDER BY pos")]
 
     async def refresh_playlists(self, c: dict) -> None:
@@ -746,9 +747,9 @@ async def stats_cmd(i: discord.Interaction, channel: str) -> None:
             if st:
                 tag = f", {n(st['subs'])} subs at {win} ({name})"
                 break
-        letter = {"short": "S", "topic": "T", "long": "L"}.get(v.get("kind") or "", "L")
+        letter = {"short": "S", "topic": "W", "long": "L"}.get(v.get("kind") or "", "L")
         lines.append(f"{letter} {code_text(v.get('code'), v.get('code_src'))} [{v['title'][:45]}](https://youtu.be/{v['video_id']}): {n(s['views'] if s else None)} views{tag}")
-    e.add_field(name="Latest videos (S = Short, T = weekly topic, L = other long)", value="\n".join(lines)[:1024] or "-", inline=False)
+    e.add_field(name="Latest videos (S = Short, W = weekly topic, L = other long)", value="\n".join(lines)[:1024] or "-", inline=False)
     if not b.yt.analytics_enabled(channel):
         e.set_footer(text="YouTube Studio is not connected for this channel, so there are no subscriber ratings.")
     await i.followup.send(embed=e)
@@ -969,7 +970,7 @@ async def rule_list(i: discord.Interaction) -> None:
     text = "\n".join(f"{k}. `{c}`: {p.replace('|', ', ')}" for k, (c, p) in enumerate(rules, 1))
     text += (f"\nNo match: `{config.FALLBACK_CODES[1]}` for Shorts, `{config.FALLBACK_CODES[0]}` for other videos."
              "\nThe first rule with a word in the title or a playlist name wins. A `code:` line or /tag always beats these. "
-             "Codes starting with T count as weekly-topic videos.")
+             "Codes starting with W count as weekly-topic videos.")
     await i.response.send_message(text[:1900], ephemeral=True)
 
 
@@ -1026,7 +1027,7 @@ async def help_cmd(i: discord.Interaction) -> None:
         "Trends brief, video ideas and TikTok reports when your PC runs Grabber.\n\n"
         "**Codes**\n"
         "Every post gets a code. A `code: D1` line in the description or /tag wins; otherwise Tracker picks one from the "
-        "title and playlist (shown with *, rules in /coderule list). Codes starting with T count as weekly-topic videos.\n\n"
+        "title and playlist (shown with *, rules in /coderule list). Codes starting with W count as weekly-topic videos.\n\n"
         "**Commands**\n"
         "/stats, /video link, /shorts, /report, /tag link code, /change text, /coderule\n"
         "/social: last 7 days on TikTok, /instagram: last 7 days on Instagram (both run on your PC)\n"

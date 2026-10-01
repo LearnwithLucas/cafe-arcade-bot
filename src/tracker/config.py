@@ -46,8 +46,8 @@ TIMEZONE = os.getenv("TRACKER_TIMEZONE", "Europe/Amsterdam")
 REPORT_HOUR = _int("TRACKER_REPORT_HOUR", 8)          # Monday report, local time
 REPORT_DEADLINE_HOUR = _int("TRACKER_REPORT_DEADLINE_HOUR", 12)  # post without PC data after this hour
 
-# Codes that mark a weekly-topic video (first letters of the code). T1, T2... by default.
-TOPIC_PREFIXES = tuple(x.strip().upper() for x in os.getenv("TRACKER_TOPIC_CODES", "T").split(",") if x.strip())
+# Codes that mark a weekly-topic video (first letters of the code). W1, W2... by default.
+TOPIC_PREFIXES = tuple(x.strip().upper() for x in os.getenv("TRACKER_TOPIC_CODES", "W").split(",") if x.strip())
 
 # Rating needs this much history, else the result is "not enough data".
 MIN_COMPARABLE = _int("TRACKER_MIN_COMPARABLE", 5)   # earlier videos of the same kind
@@ -72,13 +72,14 @@ def kind_of(is_short: int, code: str | None) -> str:
 
 
 # Automatic codes for YouTube, used when there is no /tag and no "code:" line. Words match the title or a playlist name.
+# Letters differ from the short-form codes (D duet, T mistake test, M mistake explainer, I invite, C carousel, Q story quote).
 # Change them in Discord with /coderule. Anything that matches nothing gets S1 (Short) or G1 (other long video).
 DEFAULT_CODE_RULES = [
-    ("T1", "out loud|hardop|oefen|practi[cs]e \\d+ questions|\\d+ vragen"),   # weekly-topic practice episode
-    ("M1", "mistake|fout|wrong|stop saying|niet of geen|fixed"),                  # one mistake fixed
+    ("W1", "out loud|hardop|oefen|practi[cs]e \\d+ questions|\\d+ vragen"),   # weekly-topic practice episode
     ("P1", "langzaam nederlands|podcast|praten over"),                           # podcast
-    ("C1", "speak with confidence|confiden|freeze|nervous|fear|afraid"),         # confidence and fear
-    ("Q1", "level|niveau"),                                                      # level checks
+    ("F1", "mistake|fout|wrong|stop saying|niet of geen|fixed"),                  # one mistake fixed
+    ("K1", "speak with confidence|confiden|freeze|nervous|fear|afraid"),         # confidence and fear
+    ("L1", "level|niveau"),                                                      # level checks
 ]
 FALLBACK_CODES = {1: "S1", 0: "G1"}
 
