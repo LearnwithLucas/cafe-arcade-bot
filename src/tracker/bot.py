@@ -79,7 +79,7 @@ class Tracker(commands.Bot):
             for lang, handles in config.DEFAULT_TIKTOK_COMPETITORS.items():
                 for h in handles:
                     await self.store.run("INSERT OR IGNORE INTO watchlist VALUES (?,?,?)", ("tiktok", h, lang))
-        for cmd in (stats_cmd, video_cmd, shorts_cmd, social_cmd, trends_cmd, ideas_cmd, tiktok_cmd, queue_cmd, clearqueue_cmd,
+        for cmd in (stats_cmd, video_cmd, shorts_cmd, social_cmd, instagram_cmd, trends_cmd, ideas_cmd, tiktok_cmd, queue_cmd, clearqueue_cmd,
                     pc_cmd, brief_cmd, help_cmd):
             self.tree.add_command(cmd)
         self.tree.add_command(watch_group)
@@ -311,7 +311,8 @@ class Tracker(commands.Bot):
         except Exception:
             log.exception("Daily brief failed")
         # Ask the PC for the TikTok and Instagram week; it runs whenever Grabber is next open.
-        await self.queue_job("social7d")
+        await self.queue_job("tiktok7d")
+        await self.queue_job("instagram7d")
 
     @yt_loop.before_loop
     @brief_loop.before_loop
@@ -583,11 +584,18 @@ async def shorts_cmd(i: discord.Interaction, channel: str = "both", days: app_co
     await i.followup.send(embeds=embeds or [discord.Embed(description="No channel data yet.")])
 
 
-@app_commands.command(name="social", description="Ask your PC for the last 7 days on your TikTok and Instagram accounts")
+@app_commands.command(name="social", description="Last 7 days on your TikTok accounts (runs on your PC)")
 async def social_cmd(i: discord.Interaction) -> None:
-    jid = await bot_of(i).queue_job("social7d")
+    jid = await bot_of(i).queue_job("tiktok7d")
     await i.response.send_message(f"Queued as job #{jid}. Your PC refreshes your TikTok numbers first, so give it a few minutes. "
                                   "Results land in the tiktok channel.", ephemeral=True)
+
+
+@app_commands.command(name="instagram", description="Last 7 days on your Instagram accounts (runs on your PC, Chrome must be open)")
+async def instagram_cmd(i: discord.Interaction) -> None:
+    jid = await bot_of(i).queue_job("instagram7d")
+    await i.response.send_message(f"Queued as job #{jid}. Chrome reads your Instagram Reels tabs first (1 to 3 minutes per account). "
+                                  "Results land in the instagram channel.", ephemeral=True)
 
 
 @app_commands.command(name="queue", description="Jobs waiting for or running on your PC")
@@ -639,7 +647,7 @@ async def help_cmd(i: discord.Interaction) -> None:
         "Trends brief, video ideas and TikTok reports when your PC runs Grabber.\n\n"
         "**Commands**\n"
         "/stats, /video link, /shorts, /brief\n"
-        "/social: last 7 days on TikTok and Instagram (runs on your PC)\n"
+        "/social: last 7 days on TikTok, /instagram: last 7 days on Instagram (both run on your PC)\n"
         "/watchlist add, remove, list\n"
         "/trends, /ideas, /tiktok [handle], /queue, /clearqueue, /pc"))
     await i.response.send_message(embed=e, ephemeral=True)
