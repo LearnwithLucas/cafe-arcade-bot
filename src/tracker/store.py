@@ -42,7 +42,23 @@ CREATE TABLE IF NOT EXISTS jobs (
     kind TEXT, arg TEXT, created INTEGER, message_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS yt_stats (       -- YouTube Studio numbers for a fixed window after publishing
+    video_id TEXT, win TEXT, views INTEGER, subs INTEGER, ext_pct REAL, ts INTEGER,
+    PRIMARY KEY (video_id, win)
+);
+CREATE TABLE IF NOT EXISTS tags (           -- codes set by hand with /tag (platform: yt, tt, ig)
+    platform TEXT, post_id TEXT, code TEXT, ts INTEGER,
+    PRIMARY KEY (platform, post_id)
+);
+CREATE TABLE IF NOT EXISTS changes (        -- the one change for each week, set with /change
+    week TEXT PRIMARY KEY, text TEXT, ts INTEGER
+);
 """
+
+MIGRATIONS = [
+    "ALTER TABLE videos ADD COLUMN code TEXT",
+    "ALTER TABLE videos ADD COLUMN kind TEXT",
+]
 
 
 class Store:
@@ -55,6 +71,11 @@ class Store:
         self.db = await aiosqlite.connect(self.path.as_posix())
         await self.db.execute("PRAGMA journal_mode = WAL;")
         await self.db.executescript(SCHEMA)
+        for sql in MIGRATIONS:
+            try:
+                await self.db.execute(sql)
+            except aiosqlite.OperationalError:
+                pass  # column already there
         await self.db.commit()
 
     async def close(self) -> None:

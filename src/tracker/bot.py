@@ -1,4 +1,4 @@
-"""Tracker: YouTube stats, competitor watch, daily brief and a job queue for the Grabber agent on Lucas's PC.
+"""Tracker: YouTube stats rated on subscribers, a Monday report, weekly competitor watch and a job queue for the Grabber agent on Lucas's PC.
 
 Runs next to the arcade bot and TradingCow in the same process, with its own token and database.
 The PC agent talks to Discord directly with the same bot token: it picks up JOB messages in
@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import statistics
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -21,7 +22,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from . import config
-from .config import CHANNELS, bucket
+from .config import CHANNELS, KIND_LABEL, kind_of, parse_code, rate
 from .store import Store
 from .youtube import YouTube, iso_duration_seconds
 
@@ -35,6 +36,12 @@ try:
     TZ = ZoneInfo(config.TIMEZONE)
 except ZoneInfoNotFoundError:  # no tz database on the host
     TZ = timezone(timedelta(hours=2))
+try:
+    PACIFIC = ZoneInfo("America/Los_Angeles")  # YouTube Analytics counts days in Pacific time
+except ZoneInfoNotFoundError:
+    PACIFIC = timezone(timedelta(hours=-8))
+WINDOWS = [("7d", 7), ("28d", 28)]   # rating windows: publish day plus 6 or 27 days
+LAG_DAYS = 3                          # Studio numbers settle about 2 to 3 days late
 
 
 def n(v) -> str:
@@ -65,6 +72,40 @@ def fmt_label(is_short: int) -> str:
     return "Short" if is_short else "Long-form"
 
 
+def kind_label(v: dict) -> str:
+    return KIND_LABEL.get(v.get("kind") or kind_of(v.get("is_short", 0), v.get("code")), "Video")
+
+
+def code_text(code: str | None) -> str:
+    return f"`{code}`" if code else "`no code`"
+
+
+def post_ref(link: str) -> tuple[str, str] | None:
+    """(platform, id) for a YouTube, TikTok or Instagram link."""
+    t = link.strip()
+    if "tiktok.com" in t:
+        m = re.search(r"/video/(\d+)", t)
+        return ("tt", m.group(1)) if m else None
+    if "instagram.com" in t:
+        m = re.search(r"/(?:reel|reels|p)/([^/?#]+)", t)
+        return ("ig", m.group(1)) if m else None
+    vid = video_id_from(t)
+    return ("yt", vid) if re.fullmatch(r"[A-Za-z0-9_-]{11}", vid) else None
+
+
+def ratings_text(names: list[str]) -> str:
+    """"over, par, par" -> "par 2, over 1"."""
+    counts: dict[str, int] = {}
+    for x in names:
+        counts[x] = counts.get(x, 0) + 1
+    return ", ".join(f"{k} {v}" for k, v in sorted(counts.items(), key=lambda kv: -kv[1]))
+
+
+def week_key(d: date) -> str:
+    """The Monday that starts the week of d."""
+    return (d - timedelta(days=d.weekday())).isoformat()
+
+
 class Tracker(commands.Bot):
     def __init__(self, db_path: Path) -> None:
         super().__init__(command_prefix="!tracker-unused ", intents=discord.Intents.default(), help_command=None)
@@ -79,21 +120,22 @@ class Tracker(commands.Bot):
             for lang, handles in config.DEFAULT_TIKTOK_COMPETITORS.items():
                 for h in handles:
                     await self.store.run("INSERT OR IGNORE INTO watchlist VALUES (?,?,?)", ("tiktok", h, lang))
+        await self.store.run("UPDATE videos SET kind = CASE WHEN is_short=1 THEN 'short' ELSE 'long' END WHERE kind IS NULL")
         for cmd in (stats_cmd, video_cmd, shorts_cmd, social_cmd, instagram_cmd, trends_cmd, ideas_cmd, tiktok_cmd, queue_cmd, clearqueue_cmd,
-                    pc_cmd, brief_cmd, help_cmd):
+                    pc_cmd, report_cmd, tag_cmd, change_cmd, help_cmd):
             self.tree.add_command(cmd)
         self.tree.add_command(watch_group)
         guild = discord.Object(id=config.GUILD_ID)
         self.tree.copy_global_to(guild=guild)
         await self.tree.sync(guild=guild)
         self.yt_loop.start()
-        self.brief_loop.start()
+        self.report_loop.start()
         if not self.yt.enabled:
             log.warning("YOUTUBE_API_KEY not set: Tracker runs without YouTube stats")
 
     async def close(self) -> None:
         self.yt_loop.cancel()
-        self.brief_loop.cancel()
+        self.report_loop.cancel()
         await self.yt.close()
         await self.store.close()
         await super().close()
@@ -151,6 +193,7 @@ class Tracker(commands.Bot):
             for c in await self.store.rows("SELECT * FROM channels"):
                 await self.sync_channel(c)
             await self.check_milestones()
+            await self.check_ratings()
         except Exception:
             log.exception("Tracker YouTube sync failed")
 
@@ -172,12 +215,19 @@ class Tracker(commands.Bot):
         now = int(time.time())
         for v in await self.yt.videos(new_ids):
             dur = iso_duration_seconds(v["contentDetails"].get("duration", ""))
-            await self.store.run("INSERT OR IGNORE INTO videos VALUES (?,?,?,?,?,?,?)",
+            code = await self.code_for("yt", v["id"], v["snippet"].get("description")) if own else None
+            await self.store.run("INSERT OR IGNORE INTO videos(video_id, channel_id, title, published, duration, is_short, announced, code, kind) "
+                                 "VALUES (?,?,?,?,?,?,?,?,?)",
                                  (v["id"], c["channel_id"], v["snippet"]["title"], parse_ts(v["snippet"]["publishedAt"]),
-                                  dur, int(dur <= 180), 0 if known_before else 1))
+                                  dur, int(dur <= 180), 0 if known_before else 1, code, kind_of(int(dur <= 180), code)))
         # Fresh numbers for everything published in the last 35 days.
         recent = await self.store.rows("SELECT * FROM videos WHERE channel_id=? AND published>=?", (c["channel_id"], now - 35 * DAY))
         for v in await self.yt.videos([r["video_id"] for r in recent]):
+            if own:  # pick up a code added to the description later
+                code = await self.code_for("yt", v["id"], v["snippet"].get("description"))
+                dur = iso_duration_seconds(v["contentDetails"].get("duration", ""))
+                await self.store.run("UPDATE videos SET title=?, code=?, kind=? WHERE video_id=?",
+                                     (v["snippet"]["title"], code, kind_of(int(dur <= 180), code), v["id"]))
             s = v.get("statistics", {})
             await self.store.snapshot(v["id"], int(s.get("viewCount", 0) or 0), int(s.get("likeCount", 0) or 0),
                                       int(s.get("commentCount", 0) or 0))
@@ -185,17 +235,21 @@ class Tracker(commands.Bot):
             await self.announce(c, r)
             await self.store.run("UPDATE videos SET announced=1 WHERE video_id=?", (r["video_id"],))
 
+    async def code_for(self, platform: str, post_id: str, text: str | None) -> str | None:
+        """A code set with /tag wins, else the "code: X" line in the description."""
+        t = await self.store.one("SELECT code FROM tags WHERE platform=? AND post_id=?", (platform, post_id))
+        return t["code"] if t else parse_code(text)
+
     async def announce(self, c: dict, v: dict) -> None:
-        url = f"https://youtu.be/{v['video_id']}"
-        if c["own_key"]:
-            e = discord.Embed(title=f"New upload: {v['title']}", url=url, color=COLOR,
-                              description=f"{fmt_label(v['is_short'])}, published <t:{v['published']}:R>. "
-                                          f"First check-in after 24 hours.")
-            await self.post("yt_en" if c["own_key"] == "en" else "yt_nl", embed=e)
-        else:
-            e = discord.Embed(title=v["title"], url=url, color=0x8D8C84,
-                              description=f"**{c['title']}** posted a {fmt_label(v['is_short']).lower()} <t:{v['published']}:R>.")
-            await self.post("competitors", embed=e)
+        """Your own uploads only. Competitor uploads go into the Monday competitor summary."""
+        if not c["own_key"]:
+            return
+        v = await self.store.one("SELECT * FROM videos WHERE video_id=?", (v["video_id"],)) or v
+        note = "" if v.get("code") else " No code found: add a last line like `code: D1` to the description, or use /tag."
+        e = discord.Embed(title=f"New upload: {v['title']}", url=f"https://youtu.be/{v['video_id']}", color=COLOR,
+                          description=f"{code_text(v.get('code'))} {kind_label(v)}, published <t:{v['published']}:R>. "
+                                      f"First look after 24 hours, first rating at 7 days.{note}")
+        await self.post("yt_en" if c["own_key"] == "en" else "yt_nl", embed=e)
 
     async def baseline(self, channel_id: str, is_short: int, milestone: str, exclude: str) -> tuple[float | None, int, bool]:
         """Median views at this milestone for the channel's previous videos of the same format.
@@ -243,45 +297,92 @@ class Tracker(commands.Bot):
                     await self.store.run("INSERT OR REPLACE INTO milestones VALUES (?,?,?,?)", (v["video_id"], name, None, now))
                     continue
                 await self.store.run("INSERT OR REPLACE INTO milestones VALUES (?,?,?,?)", (v["video_id"], name, views, now))
-                base, size, rough = await self.baseline(v["channel_id"], v["is_short"], name, v["video_id"])
-                ratio = views / base if base else None
-                if own:
-                    await self.post_milestone(v, name, views, base, size, rough, ratio)
-                elif ratio is not None and ratio >= 3.6:
-                    e = discord.Embed(title=f"Competitor outlier: {v['title']}", url=f"https://youtu.be/{v['video_id']}", color=0xE0A53A,
-                                      description=f"**{v['channel_title']}**: {n(views)} views after 7 days, "
-                                                  f"{ratio:.1f}x their usual {fmt_label(v['is_short']).lower()} ({n(base)}"
-                                                  f"{', rough baseline' if rough else ''}). Worth a look at the title, thumbnail and hook.")
-                    await self.post("competitors", embed=e)
+                if own and name == "24h":
+                    await self.post_first_look(v, views)
+                elif own and name == "7d" and not self.yt.analytics_enabled(v["own_key"]):
+                    await self.post("yt_en" if v["own_key"] == "en" else "yt_nl", content=(
+                        f"7 days: **{v['title']}** has {n(views)} views. Not rated: ratings use subscribers, which need YouTube Studio "
+                        f"access for this channel (TRACKER_YT_REFRESH_{v['own_key'].upper()} on Render)."))
 
-    async def post_milestone(self, v, name, views, base, size, rough, ratio) -> None:
-        b = bucket(ratio)
+    async def post_first_look(self, v: dict, views: int) -> None:
+        """24 hours: views only, no rating. Subscriber numbers are not in Studio yet."""
         snap = await self.store.one("SELECT likes, comments FROM snapshots WHERE video_id=? ORDER BY ts DESC LIMIT 1", (v["video_id"],))
-        e = discord.Embed(title=f"{name} check: {v['title']}", url=f"https://youtu.be/{v['video_id']}", color=COLOR)
+        e = discord.Embed(title=f"24h first look: {v['title']}", url=f"https://youtu.be/{v['video_id']}", color=COLOR,
+                          description=f"{code_text(v.get('code'))} {kind_label(v)}. No rating yet: it is rated on subscribers at 7 days, "
+                                      f"once YouTube Studio has the numbers (about 10 days after upload).")
         e.add_field(name="Views", value=n(views))
-        e.add_field(name="Usual at this point", value=(n(base) + (" (rough)" if rough else "") + f"\n{size} videos") if base else "not enough data")
-        e.add_field(name="Result", value=f"**{b}**" + (f" ({ratio:.2f}x)" if ratio else ""))
         if snap:
             e.add_field(name="Likes / comments", value=f"{n(snap['likes'])} / {n(snap['comments'])}")
-        key = v["own_key"]
-        if self.yt.analytics_enabled(key):
-            try:
-                a = await self.yt.video_analytics(key, v["video_id"], datetime.fromtimestamp(v["published"], TZ).date())
-                if a.get("videoThumbnailImpressions") is not None:
-                    e.add_field(name="Impressions / CTR", value=f"{n(a['videoThumbnailImpressions'])} / {pct(a.get('videoThumbnailImpressionsClickRate'))}")
-                if a.get("averageViewPercentage") is not None:
-                    e.add_field(name="Avg viewed", value=f"{pct(a['averageViewPercentage'])} ({n(a.get('averageViewDuration'))}s)")
-                if a.get("subscribersGained") is not None:
-                    e.add_field(name="Subs gained", value=n(a["subscribersGained"]))
-                if a.get("traffic"):
-                    e.add_field(name="Traffic", value=", ".join(f"{s.replace('_', ' ').lower()} {p:.0f}%" for s, p in a["traffic"][:4]), inline=False)
-            except Exception:
-                log.exception("Video analytics failed for %s", v["video_id"])
-        e.set_footer(text=f"{fmt_label(v['is_short'])}. Buckets: outlier 3.6x+, over 1.6x+, par 0.72x+, under 0.5x+, flop below.")
-        await self.post("yt_en" if key == "en" else "yt_nl", embed=e)
-        if b in ("outlier", "flop"):
-            await self.post("alerts", content=f"{'Outlier' if b == 'outlier' else 'Flop'} at {name}: **{v['title']}**, "
-                                              f"{n(views)} views vs usual {n(base)} ({ratio:.2f}x). https://youtu.be/{v['video_id']}")
+        await self.post("yt_en" if v["own_key"] == "en" else "yt_nl", embed=e)
+
+    # ------------------------------------------------------------ ratings on subscribers (YouTube Studio)
+    async def check_ratings(self) -> None:
+        """Fetch subscribers, views and outside-YouTube share for the 7-day and 28-day windows, then rate.
+
+        Videos that were already old when Studio was connected are filled in quietly, as history to compare with."""
+        today = datetime.now(PACIFIC).date()
+        budget = 30
+        for c in await self.store.rows("SELECT * FROM channels WHERE own_key IS NOT NULL"):
+            key = c["own_key"]
+            if not self.yt.analytics_enabled(key):
+                continue
+            since = await self.store.get(f"studio_since:{key}")
+            if since is None:
+                since = int(time.time())
+                await self.store.set(f"studio_since:{key}", since)
+                log.info("YouTube Studio connected for %s; filling in history quietly", key)
+            vids = await self.store.rows("SELECT * FROM videos WHERE channel_id=? AND published>=? ORDER BY published",
+                                         (c["channel_id"], int(time.time()) - 200 * DAY))
+            for v in vids:
+                pub = datetime.fromtimestamp(v["published"], PACIFIC).date()
+                for win, days in WINDOWS:
+                    ready = pub + timedelta(days=days - 1 + LAG_DAYS)
+                    if today < ready or await self.store.one("SELECT 1 AS x FROM yt_stats WHERE video_id=? AND win=?", (v["video_id"], win)):
+                        continue
+                    if budget <= 0:
+                        return
+                    budget -= 1
+                    r = await self.yt.video_window(key, v["video_id"], pub, pub + timedelta(days=days - 1))
+                    if r is None:
+                        log.warning("Studio numbers unavailable for %s; check the refresh token", key)
+                        break
+                    await self.store.run("INSERT OR REPLACE INTO yt_stats VALUES (?,?,?,?,?,?)",
+                                         (v["video_id"], win, r["views"], r["subs"], r["ext_pct"], int(time.time())))
+                    ready_ts = datetime.combine(ready, datetime.min.time(), PACIFIC).timestamp()
+                    if ready_ts >= since - DAY:
+                        await self.post_rating({**v, "own_key": key}, win, r)
+
+    async def earlier_subs(self, v: dict, win: str) -> list[float]:
+        """Subscribers in the same window for the 20 most recent earlier videos of the same kind on the same channel."""
+        rows = await self.store.rows(
+            "SELECT s.subs FROM yt_stats s JOIN videos v ON v.video_id=s.video_id "
+            "WHERE v.channel_id=? AND v.kind=? AND s.win=? AND v.published<? AND v.video_id<>? "
+            "ORDER BY v.published DESC LIMIT 20",
+            (v["channel_id"], v.get("kind") or kind_of(v["is_short"], v.get("code")), win, v["published"], v["video_id"]))
+        return [r["subs"] for r in rows if r["subs"] is not None]
+
+    async def rating_of(self, v: dict, win: str) -> tuple[dict | None, str, str]:
+        s = await self.store.one("SELECT * FROM yt_stats WHERE video_id=? AND win=?", (v["video_id"], win))
+        if not s:
+            return None, "not rated yet", ""
+        name, why = rate(s["subs"], await self.earlier_subs(v, win))
+        return s, name, why
+
+    async def post_rating(self, v: dict, win: str, r: dict) -> None:
+        name, why = rate(r["subs"], await self.earlier_subs(v, win))
+        days = dict(WINDOWS)[win]
+        e = discord.Embed(title=f"{win} rating: {v['title']}", url=f"https://youtu.be/{v['video_id']}", color=COLOR,
+                          description=f"{code_text(v.get('code'))} {kind_label(v)}. **{name}**: {why}.")
+        e.add_field(name="Subscribers", value=n(r["subs"]))
+        e.add_field(name="Views", value=n(r["views"]))
+        e.add_field(name="Subs per 1,000 views", value=f"{r['subs'] / r['views'] * 1000:.1f}" if r["views"] else "-")
+        e.add_field(name="Views from outside YouTube", value=pct(r["ext_pct"]))
+        e.set_footer(text=f"Rated on subscribers against earlier {kind_label(v).lower()}s on this channel, over the same "
+                          f"{days} days after publishing. Outlier 3.6x+, over 1.6x+, par 0.72x+, under 0.5x+, flop below.")
+        await self.post("yt_en" if v["own_key"] == "en" else "yt_nl", embed=e)
+        if name in ("outlier", "flop"):
+            await self.post("alerts", content=f"{name.capitalize()} at {win}: {code_text(v.get('code'))} **{v['title']}**, "
+                                              f"{why}. https://youtu.be/{v['video_id']}")
 
     async def top_shorts(self, own_key: str, days: int = 7) -> list[dict]:
         """Your Shorts published in the last N days, most viewed first, with their latest numbers."""
@@ -296,26 +397,34 @@ class Tracker(commands.Bot):
                 out.append({**v, **s, "per_hour": s["views"] / max(1, (now - v["published"]) / HOUR)})
         return sorted(out, key=lambda r: r["views"], reverse=True)
 
-    # ------------------------------------------------------------ daily brief
+    # ------------------------------------------------------------ Monday report
     @tasks.loop(minutes=5)
-    async def brief_loop(self) -> None:
+    async def report_loop(self) -> None:
         now = datetime.now(TZ)
-        if now.hour != config.DAILY_BRIEF_HOUR:
+        if now.weekday() != 0:
             return
         today = now.date().isoformat()
-        if await self.store.get("brief_sent") == today:
+        if await self.store.get("report_sent") == today:
             return
-        await self.store.set("brief_sent", today)
+        if now.hour >= max(0, config.REPORT_HOUR - 2) and await self.store.get("week_job") != today:
+            # Ask the PC for TikTok and Instagram first, so its numbers are in by report time.
+            await self.store.set("week_job", today)
+            await self.store.set("week_job_ts", int(time.time()))
+            await self.queue_job("week", await self.tag_arg())
+        if now.hour < config.REPORT_HOUR:
+            return
+        pc = await self.latest_weekdata(int(await self.store.get("week_job_ts", 0) or 0))
+        if pc is None and now.hour < config.REPORT_DEADLINE_HOUR:
+            return  # give the PC until the deadline
+        await self.store.set("report_sent", today)
         try:
-            await self.post("daily_brief", embed=await self.build_brief())
+            await self.post("weekly_report", embeds=await self.build_report(pc))
+            await self.post("competitors", embed=await self.build_competitors())
         except Exception:
-            log.exception("Daily brief failed")
-        # Ask the PC for the TikTok and Instagram week; it runs whenever Grabber is next open.
-        await self.queue_job("tiktok7d")
-        await self.queue_job("instagram7d")
+            log.exception("Monday report failed")
 
     @yt_loop.before_loop
-    @brief_loop.before_loop
+    @report_loop.before_loop
     async def _wait(self) -> None:
         await self.wait_until_ready()
 
@@ -325,57 +434,131 @@ class Tracker(commands.Bot):
         old = await self.store.one("SELECT * FROM channel_stats WHERE channel_id=? AND ts<=? ORDER BY ts DESC LIMIT 1", (channel_id, now - seconds))
         return cur, old
 
-    async def build_brief(self) -> discord.Embed:
-        now = int(time.time())
-        e = discord.Embed(title=f"Daily brief, {datetime.now(TZ).strftime('%A %d %B')}", color=COLOR)
+    async def tag_arg(self) -> str:
+        """Codes set with /tag for TikTok and Instagram posts, handed to the PC with the week job."""
+        rows = await self.store.rows("SELECT platform, post_id, code FROM tags WHERE platform IN ('tt','ig') AND ts>=? ORDER BY ts DESC",
+                                     (int(time.time()) - 120 * DAY,))
+        out = ""
+        for r in rows:
+            item = f"{r['platform']}:{r['post_id']}={r['code']}"
+            if len(out) + len(item) + 1 > 1500:
+                break
+            out = f"{out},{item}" if out else item
+        return out
+
+    async def latest_weekdata(self, since_ts: int) -> dict | None:
+        """The TikTok and Instagram numbers the PC posted for the week job (a WEEKDATA message with a JSON file)."""
+        for m in await self.status_messages(100):
+            if m.content.startswith("WEEKDATA|v1") and m.created_at.timestamp() >= since_ts - 60 and m.attachments:
+                try:
+                    return json.loads((await m.attachments[0].read()).decode("utf-8"))
+                except Exception:
+                    log.exception("Could not read WEEKDATA")
+        return None
+
+    async def youtube_formats(self, c: dict, start_ts: int, end_ts: int) -> list[str]:
+        """Per code, the videos whose 7-day rating landed this week: subscribers and ratings."""
+        vids = await self.store.rows("SELECT * FROM videos WHERE channel_id=? AND published>=? AND published<? ORDER BY published",
+                                     (c["channel_id"], start_ts, end_ts))
+        groups: dict[str, list[tuple]] = {}
+        for v in vids:
+            s, name, _ = await self.rating_of(v, "7d")
+            if s:
+                groups.setdefault(v.get("code") or f"no code ({kind_label(v).lower()})", []).append((s["subs"], name, s["ext_pct"]))
+        lines = []
+        for code, items in sorted(groups.items()):
+            subs = [x[0] for x in items]
+            ext = [x[2] for x in items if x[2] is not None]
+            lines.append(f"`{code}`: {len(items)} video{'s' if len(items) > 1 else ''}, {n(sum(subs))} subs "
+                         f"({', '.join(n(x) for x in subs)}), rated: {ratings_text([x[1] for x in items])}"
+                         + (f", {statistics.median(ext):.0f}% from outside YouTube" if ext else ""))
+        return lines
+
+    async def build_report(self, pc: dict | None) -> list[discord.Embed]:
+        today = datetime.now(TZ).date()
+        last_mon = today - timedelta(days=today.weekday() + 7)
+        prev = await self.store.one("SELECT text FROM changes WHERE week=?", (last_mon.isoformat(),))
+        cur = await self.store.one("SELECT text FROM changes WHERE week=?", (week_key(today),))
+        head = discord.Embed(title=f"Monday report, {today.strftime('%d %B %Y')}", color=COLOR, description=(
+            f"**Last week's one change:** {prev['text'] if prev else 'none logged'}\n"
+            f"**This week's one change:** {cur['text'] if cur else 'not set yet. Use /change to set it.'}"))
+        # Follows per platform
+        lines = []
+        pac_today = datetime.now(PACIFIC).date()
+        end = pac_today - timedelta(days=2)
+        start = end - timedelta(days=6)
         for c in await self.store.rows("SELECT * FROM channels WHERE own_key IS NOT NULL ORDER BY own_key"):
-            cur, old = await self.channel_delta(c["channel_id"], DAY)
-            lines = []
-            if cur:
-                sub_d = f" ({cur['subs'] - old['subs']:+,})" if old else ""
-                view_d = f", {cur['views'] - old['views']:+,} views in 24h" if old else ""
-                lines.append(f"{n(cur['subs'])} subscribers{sub_d}{view_d}")
-            if self.yt.analytics_enabled(c["own_key"]):
-                day = await self.yt.channel_day(c["own_key"])
-                if day:
-                    lines.append(f"Studio, 2 days ago: {n(day.get('views'))} views, {n((day.get('estimatedMinutesWatched') or 0) / 60)} watch hours, "
-                                 f"+{n(day.get('subscribersGained'))} / -{n(day.get('subscribersLost'))} subs")
-            week = await self.store.rows("SELECT * FROM videos WHERE channel_id=? AND published>=? ORDER BY published DESC",
-                                         (c["channel_id"], now - 7 * DAY))
-            for v in week[:6]:
-                snap = await self.store.one("SELECT views FROM snapshots WHERE video_id=? ORDER BY ts DESC LIMIT 1", (v["video_id"],))
-                ms = await self.store.one("SELECT milestone, views FROM milestones WHERE video_id=? AND views IS NOT NULL ORDER BY ts DESC LIMIT 1", (v["video_id"],))
-                tag = ""
-                if ms:
-                    base, _, _ = await self.baseline(c["channel_id"], v["is_short"], ms["milestone"], v["video_id"])
-                    tag = f" [{ms['milestone']}: {bucket(ms['views'] / base if base else None)}]"
-                lines.append(f"[{v['title'][:60]}](https://youtu.be/{v['video_id']}): {n(snap['views'] if snap else None)} views{tag}")
-            if not week:
-                lines.append("No uploads in the last 7 days.")
-            shorts = await self.top_shorts(c["own_key"])
-            if shorts:
-                lines.append("**Top Shorts, 7 days:** " + "; ".join(
-                    f"[{r['title'][:40]}](https://youtu.be/{r['video_id']}) {n(r['views'])}" for r in shorts[:3]))
-            e.add_field(name=c["title"], value="\n".join(lines)[:1024] or "-", inline=False)
-        comp = await self.store.rows(
-            "SELECT v.*, c.title AS ct FROM videos v JOIN channels c ON c.channel_id=v.channel_id "
-            "WHERE c.own_key IS NULL AND v.published>=?", (now - DAY,))
-        if comp:
-            best = []
-            for v in comp:
-                s = await self.store.one("SELECT views FROM snapshots WHERE video_id=? ORDER BY ts DESC LIMIT 1", (v["video_id"],))
-                hours = max(1, (now - v["published"]) / HOUR)
-                best.append(((s["views"] if s else 0) / hours, v))
-            best.sort(key=lambda x: x[0], reverse=True)
-            e.add_field(name=f"Competitors: {len(comp)} new YouTube upload(s)", inline=False,
-                        value="\n".join(f"{v['ct']}: [{v['title'][:60]}](https://youtu.be/{v['video_id']}), {n(r)} views/hour" for r, v in best[:3]))
-        pc = await self.pc_status()
-        e.add_field(name="PC agent", inline=False, value=pc["text"])
-        queued = [j for j in await self.recent_jobs() if j["status"] == "queued"]
-        if queued:
-            e.add_field(name="Waiting for your PC", value=", ".join(f"#{j['id']} {j['kind']}" for j in queued[:10]), inline=False)
-        if not self.yt.enabled:
-            e.description = "YouTube numbers are off until YOUTUBE_API_KEY is set on Render."
+            r = await self.yt.channel_range(c["own_key"], start, end) if self.yt.analytics_enabled(c["own_key"]) else None
+            if r:
+                lines.append(f"YouTube {c['own_key'].upper()}: **{int(r.get('subscribersGained') or 0) - int(r.get('subscribersLost') or 0):+,}** "
+                             f"subscribers (+{n(r.get('subscribersGained'))} / -{n(r.get('subscribersLost'))}), "
+                             f"{start.strftime('%d %b')} to {end.strftime('%d %b')}")
+            else:
+                now_s, old_s = await self.channel_delta(c["channel_id"], 7 * DAY)
+                delta = f"{now_s['subs'] - old_s['subs']:+,}" if now_s and old_s else "collecting"
+                lines.append(f"YouTube {c['own_key'].upper()}: {delta} subscribers, last 7 days (public count, rounded; Studio not connected)")
+        for p in (pc or {}).get("platforms", []):
+            f = p.get("follows_week")
+            lines.append(f"{p['name']}: " + (f"**{f:+,}** followers, last 7 days" if f is not None else f"not enough data ({p.get('note') or 'no follower history yet'})"))
+        if not pc:
+            lines.append("TikTok and Instagram: no numbers from your PC this week. Start Grabber, then use /report.")
+        head.add_field(name="Follows per platform", value="\n".join(lines)[:1024] or "-", inline=False)
+        # Follows per format, at equal age
+        fmt = discord.Embed(title="Follows per format", color=COLOR, description=(
+            "Posts that turned 7 days old this week, grouped by code. Each post is rated against earlier posts of the same kind "
+            "on the same account, at the same age. Too little history means **not enough data**, not a verdict."))
+        start_ts = int((datetime.now() - timedelta(days=16)).timestamp())
+        end_ts = int((datetime.now() - timedelta(days=9)).timestamp())
+        for c in await self.store.rows("SELECT * FROM channels WHERE own_key IS NOT NULL ORDER BY own_key"):
+            if not self.yt.analytics_enabled(c["own_key"]):
+                fmt.add_field(name=f"YouTube {c['own_key'].upper()}", value="Not rated: YouTube Studio is not connected.", inline=False)
+                continue
+            yl = await self.youtube_formats(c, start_ts, end_ts)
+            fmt.add_field(name=f"YouTube {c['own_key'].upper()}", value="\n".join(yl)[:1024] or "No videos turned 7 days old this week.", inline=False)
+        for p in (pc or {}).get("platforms", []):
+            pl = []
+            for f in p.get("formats", []):
+                follows = f.get("follows") or []
+                pl.append(f"`{f['code']}`: {f['n']} post{'s' if f['n'] > 1 else ''}, "
+                          + (f"{n(sum(follows))} follows ({', '.join(n(x) for x in follows)}), rated: {ratings_text(f.get('ratings') or [])}"
+                             if follows else "no follow numbers"))
+            note = f"\n{p['format_note']}" if p.get("format_note") else ""
+            body = "\n".join(pl) or "No posts turned 7 days old this week."
+            fmt.add_field(name=p["name"], value=(body[:1020 - len(note[:300])] + note[:300]), inline=False)
+        fmt.set_footer(text="Codes come from a last line like \"code: D1\" in the description or caption, or from /tag.")
+        return [head, fmt]
+
+    async def build_competitors(self) -> discord.Embed:
+        now = int(time.time())
+        e = discord.Embed(title="Competitors, last 7 days", color=0x8D8C84)
+        new = await self.store.rows("SELECT v.*, c.title AS ct FROM videos v JOIN channels c ON c.channel_id=v.channel_id "
+                                    "WHERE c.own_key IS NULL AND v.published>=?", (now - 7 * DAY,))
+        if not new:
+            e.description = "No new competitor uploads on YouTube. Add channels with /watchlist add."
+            return e
+        per_channel: dict[str, int] = {}
+        scored = []
+        for v in new:
+            per_channel[v["ct"]] = per_channel.get(v["ct"], 0) + 1
+            s = await self.store.one("SELECT views FROM snapshots WHERE video_id=? ORDER BY ts DESC LIMIT 1", (v["video_id"],))
+            scored.append(((s["views"] if s else 0) / max(1, (now - v["published"]) / DAY), v))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        e.description = "Uploads: " + ", ".join(f"{k} {c}" for k, c in sorted(per_channel.items(), key=lambda x: -x[1]))
+        e.add_field(name="Fastest new uploads (views per day)", inline=False, value="\n".join(
+            f"{v['ct']}: [{v['title'][:60]}](https://youtu.be/{v['video_id']}), {n(r)}/day, {fmt_label(v['is_short']).lower()}"
+            for r, v in scored[:6])[:1024])
+        good = []
+        for m in await self.store.rows("SELECT m.*, v.title, v.channel_id, v.is_short, c.title AS ct FROM milestones m "
+                                       "JOIN videos v ON v.video_id=m.video_id JOIN channels c ON c.channel_id=v.channel_id "
+                                       "WHERE c.own_key IS NULL AND m.milestone='7d' AND m.views IS NOT NULL AND m.ts>=?", (now - 7 * DAY,)):
+            base, size, _ = await self.baseline(m["channel_id"], m["is_short"], "7d", m["video_id"])
+            if base and size >= 5 and m["views"] / base >= 1.6:
+                good.append((m["views"] / base, m))
+        if good:
+            good.sort(key=lambda x: x[0], reverse=True)
+            e.add_field(name="Did well at 7 days (views against their own usual)", inline=False, value="\n".join(
+                f"{m['ct']}: [{m['title'][:60]}](https://youtu.be/{m['video_id']}), {r:.1f}x" for r, m in good[:6])[:1024])
+        e.set_footer(text="Competitor subscribers per video are private, so competitors are compared on views only.")
         return e
 
     # ------------------------------------------------------------ PC agent link
@@ -452,13 +635,17 @@ async def stats_cmd(i: discord.Interaction, channel: str) -> None:
     lines = []
     for v in vids:
         s = await b.store.one("SELECT views FROM snapshots WHERE video_id=? ORDER BY ts DESC LIMIT 1", (v["video_id"],))
-        ms = await b.store.one("SELECT milestone, views FROM milestones WHERE video_id=? AND views IS NOT NULL ORDER BY ts DESC LIMIT 1", (v["video_id"],))
         tag = ""
-        if ms:
-            base, _, _ = await b.baseline(c["channel_id"], v["is_short"], ms["milestone"], v["video_id"])
-            tag = f", {ms['milestone']} {bucket(ms['views'] / base if base else None)}"
-        lines.append(f"{'S' if v['is_short'] else 'L'} [{v['title'][:55]}](https://youtu.be/{v['video_id']}): {n(s['views'] if s else None)}{tag}")
-    e.add_field(name="Latest videos (S = Short, L = long-form)", value="\n".join(lines)[:1024] or "-", inline=False)
+        for win in ("28d", "7d"):
+            st, name, _ = await b.rating_of(v, win)
+            if st:
+                tag = f", {n(st['subs'])} subs at {win} ({name})"
+                break
+        letter = {"short": "S", "topic": "T", "long": "L"}.get(v.get("kind") or "", "L")
+        lines.append(f"{letter} {code_text(v.get('code'))} [{v['title'][:45]}](https://youtu.be/{v['video_id']}): {n(s['views'] if s else None)} views{tag}")
+    e.add_field(name="Latest videos (S = Short, T = weekly topic, L = other long)", value="\n".join(lines)[:1024] or "-", inline=False)
+    if not b.yt.analytics_enabled(channel):
+        e.set_footer(text="YouTube Studio is not connected for this channel, so there are no subscriber ratings.")
     await i.followup.send(embed=e)
 
 
@@ -483,18 +670,26 @@ async def video_cmd(i: discord.Interaction, link: str) -> None:
     e.add_field(name="Likes", value=n(s.get("likeCount")))
     e.add_field(name="Comments", value=n(s.get("commentCount")))
     row = await b.store.one("SELECT v.*, c.own_key FROM videos v JOIN channels c ON c.channel_id=v.channel_id WHERE video_id=?", (vid,))
-    if row:
-        for name, _ in MILESTONES:
-            ms = await b.store.one("SELECT views FROM milestones WHERE video_id=? AND milestone=?", (vid, name))
-            if ms and ms["views"] is not None:
-                base, _, rough = await b.baseline(row["channel_id"], row["is_short"], name, vid)
-                e.add_field(name=f"At {name}", value=f"{n(ms['views'])}, {bucket(ms['views'] / base if base else None)}")
-        if row["own_key"] and b.yt.analytics_enabled(row["own_key"]):
-            a = await b.yt.video_analytics(row["own_key"], vid, datetime.fromtimestamp(pub, TZ).date())
+    if row and row["own_key"]:
+        e.description += f"\n{code_text(row.get('code'))} {kind_label(row)}"
+        for win, _ in WINDOWS:
+            st, name, why = await b.rating_of(row, win)
+            if st:
+                e.add_field(name=f"At {win}", inline=False,
+                            value=f"**{name}**: {n(st['subs'])} subs, {n(st['views'])} views, {pct(st['ext_pct'])} from outside YouTube. {why}")
+        if b.yt.analytics_enabled(row["own_key"]):
+            a = await b.yt.video_analytics(row["own_key"], vid, datetime.fromtimestamp(pub, PACIFIC).date())
+            if a.get("subscribersGained") is not None:
+                e.add_field(name="Subs so far", value=n(a["subscribersGained"]))
+            ext = dict(a.get("traffic") or []).get("EXT_URL")
+            if a.get("traffic"):
+                e.add_field(name="Outside YouTube so far", value=pct(ext or 0.0))
             if a.get("videoThumbnailImpressionsClickRate") is not None:
                 e.add_field(name="CTR", value=pct(a["videoThumbnailImpressionsClickRate"]))
             if a.get("averageViewPercentage") is not None:
                 e.add_field(name="Avg viewed", value=pct(a["averageViewPercentage"]))
+        else:
+            e.set_footer(text="YouTube Studio is not connected for this channel, so there are no subscriber numbers.")
     await i.followup.send(embed=e)
 
 
@@ -577,7 +772,7 @@ async def shorts_cmd(i: discord.Interaction, channel: str = "both", days: app_co
             total = sum(r["views"] for r in rows)
             e.description = f"{len(rows)} Shorts, {n(total)} views in total, median {n(statistics.median(r['views'] for r in rows))}."
             e.add_field(name="Most viewed", inline=False, value="\n".join(
-                f"{k}. [{r['title'][:60]}](https://youtu.be/{r['video_id']}): {n(r['views'])} views "
+                f"{k}. {code_text(r.get('code'))} [{r['title'][:50]}](https://youtu.be/{r['video_id']}): {n(r['views'])} views "
                 f"({n(r['per_hour'])}/h), {n(r['likes'])} likes, {n(r['comments'])} comments, <t:{r['published']}:R>"
                 for k, r in enumerate(rows[:10], 1))[:1024])
         embeds.append(e)
@@ -630,23 +825,64 @@ async def pc_cmd(i: discord.Interaction) -> None:
     await i.response.send_message((await bot_of(i).pc_status())["text"], ephemeral=True)
 
 
-@app_commands.command(name="brief", description="Post the daily brief now")
-async def brief_cmd(i: discord.Interaction) -> None:
+@app_commands.command(name="report", description="Post the Monday report now (uses the latest TikTok and Instagram numbers from your PC)")
+async def report_cmd(i: discord.Interaction) -> None:
     b = bot_of(i)
     await i.response.defer(ephemeral=True)
-    await b.post("daily_brief", embed=await b.build_brief())
-    await i.followup.send("Posted in daily-brief.", ephemeral=True)
+    pc = await b.latest_weekdata(int(time.time()) - 8 * DAY)
+    await b.post("weekly_report", embeds=await b.build_report(pc))
+    await b.post("competitors", embed=await b.build_competitors())
+    note = "" if pc else " There were no PC numbers from the last 8 days, so I also asked your PC for them. Run /report again once the week job is done."
+    if not pc:
+        await b.queue_job("week", await b.tag_arg())
+    await i.followup.send("Posted the report and the competitor summary." + note, ephemeral=True)
+
+
+@app_commands.command(name="tag", description="Set the code (like D1) for a YouTube, TikTok or Instagram post")
+@app_commands.describe(link="Link to the post", code="Its code, like D1, T1 or M1")
+async def tag_cmd(i: discord.Interaction, link: str, code: str) -> None:
+    b = bot_of(i)
+    ref = post_ref(link)
+    code = code.strip().upper()
+    if not ref or not re.fullmatch(r"[A-Z]{1,3}[0-9]{1,3}", code):
+        await i.response.send_message("I need a YouTube, TikTok or Instagram post link and a code like D1.", ephemeral=True)
+        return
+    platform, pid = ref
+    await b.store.run("INSERT OR REPLACE INTO tags VALUES (?,?,?,?)", (platform, pid, code, int(time.time())))
+    if platform == "yt":
+        row = await b.store.one("SELECT is_short FROM videos WHERE video_id=?", (pid,))
+        if row:
+            await b.store.run("UPDATE videos SET code=?, kind=? WHERE video_id=?", (code, kind_of(row["is_short"], code), pid))
+    where = {"yt": "YouTube", "tt": "TikTok", "ig": "Instagram"}[platform]
+    await i.response.send_message(f"{where} post tagged `{code}`. A code you set here wins over the one in the description.", ephemeral=True)
+
+
+@app_commands.command(name="change", description="Set this week's one change, or see it when left empty")
+@app_commands.describe(text="The one thing you change this week, like: hook in the first 2 seconds on every duet")
+async def change_cmd(i: discord.Interaction, text: str | None = None) -> None:
+    b = bot_of(i)
+    wk = week_key(datetime.now(TZ).date())
+    if text:
+        await b.store.run("INSERT OR REPLACE INTO changes VALUES (?,?,?)", (wk, text.strip()[:300], int(time.time())))
+        await i.response.send_message(f"This week's one change: {text.strip()[:300]}\nThe Monday report shows it next to the numbers.", ephemeral=True)
+        return
+    row = await b.store.one("SELECT text FROM changes WHERE week=?", (wk,))
+    await i.response.send_message(f"This week's one change: {row['text']}" if row else "No change set this week. Use /change text:...", ephemeral=True)
 
 
 @app_commands.command(name="help", description="What Tracker can do")
 async def help_cmd(i: discord.Interaction) -> None:
     e = discord.Embed(title="Tracker", color=COLOR, description=(
         "**Automatic**\n"
-        "New uploads, then 24h, 7d and 28d check-ins for every video, compared with your usual (yt channels)\n"
-        "Outliers and flops (alerts). Competitor uploads and outliers (competitors). Daily brief at 08:00.\n"
+        "New uploads and a 24h first look (yt channels). Ratings on subscribers at 7 and 28 days, against earlier videos "
+        "of the same kind: Shorts, weekly-topic videos and other long videos. Outliers and flops (alerts).\n"
+        "Monday report at 08:00: follows per platform and per format code, plus the week's one change. "
+        "Competitor summary every Monday.\n"
         "Trends brief, video ideas and TikTok reports when your PC runs Grabber.\n\n"
+        "**Codes**\n"
+        "End a description or caption with a line like `code: D1`. Codes starting with T count as weekly-topic videos.\n\n"
         "**Commands**\n"
-        "/stats, /video link, /shorts, /brief\n"
+        "/stats, /video link, /shorts, /report, /tag link code, /change text\n"
         "/social: last 7 days on TikTok, /instagram: last 7 days on Instagram (both run on your PC)\n"
         "/watchlist add, remove, list\n"
         "/trends, /ideas, /tiktok [handle], /queue, /clearqueue, /pc"))

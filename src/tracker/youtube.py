@@ -141,6 +141,28 @@ class YouTube:
             out["traffic"] = [(r["insightTrafficSourceType"], r["views"] / total * 100) for r in rows]
         return out
 
+    async def video_window(self, key: str, video_id: str, start: date, end: date) -> dict | None:
+        """Views, subscribers gained and the share of views from outside YouTube for one video in a date range.
+
+        None when Studio is not connected or Google refused the request."""
+        rows = await self.report(key, "views,subscribersGained", start, end, filters=f"video=={video_id}")
+        if rows is None:
+            return None
+        out = {"views": int((rows[0] if rows else {}).get("views") or 0),
+               "subs": int((rows[0] if rows else {}).get("subscribersGained") or 0), "ext_pct": None}
+        traffic = await self.report(key, "views", start, end, dimensions="insightTrafficSourceType", filters=f"video=={video_id}")
+        if traffic:
+            total = sum(r["views"] for r in traffic)
+            if total:
+                out["ext_pct"] = sum(r["views"] for r in traffic if r["insightTrafficSourceType"] == "EXT_URL") / total * 100
+        return out
+
+    async def channel_range(self, key: str, start: date, end: date) -> dict | None:
+        rows = await self.report(key, "views,subscribersGained,subscribersLost", start, end)
+        if rows is None:
+            return None
+        return rows[0] if rows else {"views": 0, "subscribersGained": 0, "subscribersLost": 0}
+
     async def channel_day(self, key: str) -> dict | None:
         """Yesterday's channel totals (Analytics data lags about two days, so we take the latest full day)."""
         end = date.today() - timedelta(days=2)
