@@ -77,7 +77,7 @@ def guide_text(kind: str, dump_pct: int) -> tuple[str, str]:
                     "/flips cash: the best flips for your cash, slots and patience.\n"
                     "/alch: the best items to high alch right now.\n"
                     "/dumps: items well under their weekly average.\n"
-                    "/skill skill level: profit per XP at your level.\n"
+                    "/skill skill: the 10 most profitable things to do in a skill right now.\n"
                     "/watch add: get pinged here when an item crosses your price.\n\n"
                     "Sudden dumps, F2P flips and members flips each have their own channel."),
     }[kind]
@@ -528,37 +528,62 @@ async def dumps_cmd(interaction: discord.Interaction, days: app_commands.Range[i
     await interaction.followup.send(embed=e)
 
 
-@app_commands.command(name="skill", description="Profit per XP for a skill at your level")
-@app_commands.describe(skill="Skill", level="Your level", f2p="F2P methods only (default on)",
-                       instant="Use instant prices instead of patient ones",
-                       sort="Fastest XP that still profits (default), or most gp per XP")
+@app_commands.command(name="skill", description="Top 10 most profitable things to do in a skill right now")
+@app_commands.describe(skill="Skill", level="Your level (empty: show every method with its level)",
+                       items="F2P, members or all methods (default: F2P in the F2P channel, all elsewhere)",
+                       sort="Most gp per hour (default), most gp per XP, or fastest XP that still profits",
+                       instant="Use instant prices instead of patient offers")
 @app_commands.choices(skill=[app_commands.Choice(name=s, value=s) for s in market.SKILLS],
-                      sort=[app_commands.Choice(name="Fastest XP that still profits", value="xp"),
-                            app_commands.Choice(name="Most gp per XP", value="gp")])
-async def skill_cmd(interaction: discord.Interaction, skill: str, level: app_commands.Range[int, 1, 99],
-                    f2p: bool = True, instant: bool = False, sort: str = "xp") -> None:
+                      items=[app_commands.Choice(name="F2P methods", value="f2p"),
+                             app_commands.Choice(name="Members methods", value="p2p"),
+                             app_commands.Choice(name="All methods", value="all")],
+                      sort=[app_commands.Choice(name="Most gp per hour", value="hour"),
+                            app_commands.Choice(name="Most gp per XP", value="gp"),
+                            app_commands.Choice(name="Fastest XP that still profits", value="xp")])
+async def skill_cmd(interaction: discord.Interaction, skill: str, level: app_commands.Range[int, 1, 99] | None = None,
+                    items: str | None = None, sort: str = "hour", instant: bool = False) -> None:
     b = bot_of(interaction)
-    res = [market.eval_method(m, b.by_name, b.mapping, b.latest, b.h1, b.d1, instant) for m in market.METHODS
-           if m["skill"] == skill and m["lvl"] <= level]
-    res = [r for r in res if not r.missing and r.xp > 0 and not (f2p and r.members)]
+    if items is None:
+        f2p_ch = await b.channel("f2p")
+        items = "f2p" if f2p_ch and interaction.channel_id == f2p_ch.id else "all"
+    pool = [m for m in market.METHODS if m["skill"] == skill and (level is None or m["lvl"] <= level)]
+    res = [market.eval_method(m, b.by_name, b.mapping, b.latest, b.h1, b.d1, instant) for m in pool]
+    unpriced = [r for r in res if r.missing]
+    res = [r for r in res if not r.missing and not (items == "f2p" and r.members) and not (items == "p2p" and not r.members)]
     if sort == "gp":
+        res = [r for r in res if r.xp > 0]
         res.sort(key=lambda r: r.per_xp, reverse=True)
+    elif sort == "xp":
+        res = [r for r in res if r.xp > 0]
+        # Profitable methods first, most XP per hour first; loss-making ones after, cheapest XP first.
+        res.sort(key=lambda r: (r.profit >= 0, r.xp_hour if r.profit >= 0 else r.per_xp), reverse=True)
     else:
-        # Profitable methods first, highest XP per action first; loss-making ones after, cheapest XP first.
-        res.sort(key=lambda r: (r.profit >= 0, r.xp if r.profit >= 0 else r.per_xp), reverse=True)
-    label = "fastest XP that still profits" if sort != "gp" else "most gp per XP"
-    e = discord.Embed(title=f"{skill} at level {level}", color=COLOR,
-                      description=f"{'F2P methods only' if f2p else 'F2P and members methods'}, sorted by {label}.")
+        res.sort(key=lambda r: r.profit_hour, reverse=True)
+    label = {"hour": "most gp per hour", "gp": "most gp per XP", "xp": "fastest XP that still profits"}[sort]
+    scope = {"f2p": "F2P methods", "p2p": "Members methods", "all": "F2P and members methods"}[items]
+    title = f"{skill}" + (f" at level {level}" if level else ", all levels")
+    e = discord.Embed(title=title, color=COLOR, description=f"{scope}, sorted by {label}.")
     if not res:
-        e.description = "No priced methods for this level and filter."
-    to_next = market.xp_for_level(level + 1) - market.xp_for_level(level) if level < 99 else 0
+        e.description = ("No priced methods for this level and filter."
+                         + (" Fletching and Herblore are members skills: pick All or Members methods." if skill in ("Fletching", "Herblore") else ""))
+    if res and sort == "hour" and res[0].profit_hour <= 0:
+        e.description += " Nothing in this skill makes money right now; these lose the least."
+    to_next = market.xp_for_level(level + 1) - market.xp_for_level(level) if level and level < 99 else 0
     for i, r in enumerate(res[:10]):
         extra = ""
-        if i == 0 and to_next:
+        if i == 0 and to_next and r.xp > 0:
             acts = -(-to_next // r.xp)
             extra = f"\nOne full level ({n(to_next)} XP): {n(acts)} actions, {'earns' if r.profit >= 0 else 'costs'} {n(abs(r.profit * acts))}."
-        e.add_field(name=f"{r.method['name']} (lvl {r.method['lvl']})",
-                    value=f"{signed(r.profit)} each, {r.xp:g} XP, **{r.per_xp:+.2f} gp/XP**{extra}", inline=False)
+        cap = f", capped by {r.limited_by}" if r.limited_by else ""
+        xp_part = f"{n(r.xp_hour)} XP/h, {r.per_xp:+.1f} gp/XP" if r.xp > 0 else "no XP"
+        e.add_field(name=f"{r.method['name']} (lvl {r.method['lvl']}{', members' if r.members else ''})",
+                    value=f"**{signed(r.profit_hour)}/h** ({signed(r.profit)} each, about {n(r.per_hour)}/h{cap}). {xp_part}.{extra}",
+                    inline=False)
+    foot = ("Per hour uses rough action rates with banking, capped by GE buy limits and a quarter of the hourly trade volume. "
+            + ("Instant prices." if instant else "Patient prices: buy near the insta-sell price, sell near the insta-buy price, after tax."))
+    if unpriced:
+        foot += f" {len(unpriced)} method(s) skipped: no live price."
+    e.set_footer(text=foot[:2048])
     await interaction.response.send_message(embed=e)
 
 
@@ -660,7 +685,7 @@ async def help_cmd(interaction: discord.Interaction) -> None:
         "/flips cash: best flips for your cash, slots and patience\n"
         "/alch: best items to high alch right now\n"
         "/dumps: items well under their weekly average\n"
-        "/skill skill level: profit per XP at your level\n"
+        "/skill skill: top 10 most profitable methods right now (level optional)\n"
         "/watch add, list, remove: price alerts (posted in the general channel)\n"
         "/tc_channel, /tc_channels: where automatic posts go\n"
         "/tc_guide: repost the channel explainers now\n\n"
