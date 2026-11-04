@@ -137,7 +137,7 @@ class TradingCow(QuestCompMixin, commands.Bot):
         self.tree.add_command(watch_group)
         for cmd in (price_cmd, flips_cmd, alch_cmd, dumps_cmd, skill_cmd, channel_cmd, channels_cmd, guide_cmd, help_cmd):
             self.tree.add_command(cmd)
-        await self.qc_setup()  # quest competition: /qp, /qc and its loop
+        await self.qc_setup()  # quest competition: /qp, /qp_settings and its loop
         if self.guild_ids:
             for gid in self.guild_ids:
                 g = discord.Object(id=gid)
@@ -691,8 +691,8 @@ async def help_cmd(interaction: discord.Interaction) -> None:
         "/watch add, list, remove: price alerts (posted in the general channel)\n"
         "/tc_channel, /tc_channels: where automatic posts go\n"
         "/tc_guide: repost the channel explainers now\n"
-        "/qp: update your Quest Points for the quest competition\n"
-        "/qc: quest competition board, history and admin tools\n\n"
+        "/qp: quest competition, update your QP or see your progress\n"
+        "/qp_settings: quest competition settings and players (admins)\n\n"
         "Prices come from the OSRS Wiki. The bot never touches your account."))
     await interaction.response.send_message(embed=e, ephemeral=True)
 

@@ -307,7 +307,7 @@ def board_embeds(groups: dict[str, list[Standing]], start: int, end: int, mx: in
         title="Quest Competition" + (" (test)" if TEST_MODE else ""), color=COLOR,
         description=(f"{state}\n\nLow and Medium: most Quest Points gained wins. "
                      f"High: the first two to reach the Quest Cape ({mx} QP) win.\n"
-                     f"Update your QP with **/qp** or the button on the daily reminder. "
+                     f"Press **Update my QP** below or type /qp. "
                      f"Not on the list? Ask {ORGANISER}."))
     head.set_footer(text=f"Updated {datetime.fromtimestamp(now, TZ).strftime('%d %b %H:%M')} Amsterdam time")
     out = [head]
@@ -418,8 +418,40 @@ class QPModal(discord.ui.Modal, title="Update your Quest Points"):
         await interaction.followup.send(text, ephemeral=True)
 
 
+async def player_status(qc: QCStore, user_id: int) -> str:
+    """What a player sees: their accounts, start, current, gain and place."""
+    mine = await qc.players_of(user_id)
+    if not mine:
+        return f"You aren't on the participant list yet. Ask {ORGANISER} to add you."
+    groups, start, end, mx = await qc.standings()
+    lines = []
+    for p in mine:
+        rows = groups.get(p["grp"], [])
+        place = next((i + 1 for i, r in enumerate(rows) if r.rsn.lower() == p["rsn"].lower()), None)
+        r = rows[place - 1] if place else None
+        if not r or r.current is None:
+            lines.append(f"**{p['rsn']}** ({GROUP_NAMES[p['grp']].lower()}): no QP reported yet.")
+            continue
+        score = ("Quest Cape reached" if r.cape_at else f"{max(0, mx - r.current)} QP to the cape") if p["grp"] == "high" \
+            else f"+{r.gain} since the start"
+        lines.append(f"**{p['rsn']}** ({GROUP_NAMES[p['grp']].lower()}): {r.current} QP, {score}, place {place} of {len(rows)}.")
+    now = int(time.time())
+    when = f"Starts <t:{start}:R>." if now < start else (f"Ends <t:{end}:R>." if now < end else "The competition has ended.")
+    return "\n".join(lines) + f"\n{when}"
+
+
+async def history_text(qc: QCStore, p: dict) -> str:
+    rows = await qc.history(p["rsn"])
+    lines = []
+    for ts, qp, _by, proof in rows:
+        src = {"import": " (imported)", "admin": " (set by admin)"}.get(proof or "", "")
+        link = f" [screenshot]({proof})" if proof and proof.startswith("http") else ""
+        lines.append(f"<t:{ts}:f>: {qp} QP{src}{link}")
+    return "\n".join(lines) or "No updates yet."
+
+
 class QPView(discord.ui.View):
-    """Persistent button under the daily reminder (works after restarts)."""
+    """Persistent buttons under the board and the daily reminder (they keep working after restarts)."""
 
     def __init__(self) -> None:
         super().__init__(timeout=None)
@@ -430,6 +462,444 @@ class QPView(discord.ui.View):
             await interaction.response.send_message(TEST_MSG, ephemeral=True)
             return
         await interaction.response.send_modal(QPModal())
+
+    @discord.ui.button(label="My progress", style=discord.ButtonStyle.secondary, custom_id="qc:mine")
+    async def mine(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if not can_play(interaction.user):
+            await interaction.response.send_message(TEST_MSG, ephemeral=True)
+            return
+        qc: QCStore = interaction.client.qc
+        text = await player_status(qc, interaction.user.id)
+        for p in await qc.players_of(interaction.user.id):
+            text += f"\n\n**{p['rsn']} updates**\n" + await history_text(qc, p)
+        await interaction.response.send_message(text[:2000], ephemeral=True)
+
+
+# ------------------------------------------------------------ player command
+
+@app_commands.command(name="qp", description="Quest competition: update your Quest Points or see your progress")
+@app_commands.describe(qp="Your Quest Points right now (leave empty to see your progress)",
+                       proof="Optional screenshot of your quest list", rsn="Only if you have more than one account")
+async def qp_cmd(interaction: discord.Interaction, qp: app_commands.Range[int, 0, 1000] | None = None,
+                 proof: discord.Attachment | None = None, rsn: str | None = None) -> None:
+    if not can_play(interaction.user):
+        await interaction.response.send_message(TEST_MSG, ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    if qp is None:
+        text = await player_status(interaction.client.qc, interaction.user.id)
+    else:
+        text = await submit(interaction.client, interaction, qp, rsn, proof.url if proof else None)
+    await interaction.followup.send(text, view=QPView(), ephemeral=True)
+
+
+# ------------------------------------------------------------ admin panel
+
+async def admin_only(interaction: discord.Interaction) -> bool:
+    """True when the user may use the panel; otherwise replies and returns False."""
+    if is_admin(interaction):
+        return True
+    await interaction.response.send_message(TEST_MSG if TEST_MODE else "Only competition admins can do this.", ephemeral=True)
+    return False
+
+
+async def panel_text(qc: QCStore, bot) -> str:
+    start, end = await qc.window()
+    ch = await bot.qc_channel()
+    players = await qc.players()
+    counts = {g: sum(1 for p in players if p["grp"] == g) for g in GROUPS}
+    linked = sum(1 for p in players if p["user_id"])
+    return (f"**Quest competition settings**{' (test mode)' if TEST_MODE else ''}\n"
+            f"Start {fmt_local(start)}, end {fmt_local(end)} (Amsterdam time).\n"
+            f"Channel: {ch.mention if ch else 'not found'}. Quest Cape at {await qc.max_qp()} QP.\n"
+            f"Players: {counts['low']} low, {counts['medium']} medium, {counts['high']} high "
+            f"({linked} linked to Discord).\n"
+            f"Groups by starting QP: low up to {await qc.setting('low_max', DEFAULT_LOW_MAX)}, "
+            f"medium up to {await qc.setting('medium_max', DEFAULT_MEDIUM_MAX)}, high above. "
+            f"Daily reminder at {await qc.setting('ask_hour', DEFAULT_ASK_HOUR)}:00.")
+
+
+class SettingsView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="Add player", style=discord.ButtonStyle.success, row=0)
+    async def add(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.send_modal(AddModal())
+
+    @discord.ui.button(label="Import list", style=discord.ButtonStyle.success, row=0)
+    async def imp(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.send_modal(ImportModal())
+
+    @discord.ui.button(label="Edit player", style=discord.ButtonStyle.primary, row=0)
+    async def edit(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if not await admin_only(interaction):
+            return
+        players = await interaction.client.qc.players()
+        if not players:
+            await interaction.response.send_message("No players yet. Use Add player or Import list.", ephemeral=True)
+        elif len(players) <= 25:
+            await interaction.response.send_message("Pick a player:", view=PickView(players), ephemeral=True)
+        else:
+            await interaction.response.send_modal(FindModal())
+
+    @discord.ui.button(label="Dates and limits", style=discord.ButtonStyle.secondary, row=1)
+    async def dates(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if not await admin_only(interaction):
+            return
+        qc: QCStore = interaction.client.qc
+        s, e = await qc.window()
+        await interaction.response.send_modal(DatesModal(
+            datetime.fromtimestamp(s, TZ).strftime("%Y-%m-%d %H:%M"), datetime.fromtimestamp(e, TZ).strftime("%Y-%m-%d %H:%M"),
+            await qc.max_qp(), f"{await qc.setting('low_max', DEFAULT_LOW_MAX)}/{await qc.setting('medium_max', DEFAULT_MEDIUM_MAX)}",
+            await qc.setting("ask_hour", DEFAULT_ASK_HOUR)))
+
+    @discord.ui.button(label="Channel", style=discord.ButtonStyle.secondary, row=1)
+    async def channel(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.send_message("Where should the board and reminders go?", view=ChannelView(), ephemeral=True)
+
+    @discord.ui.button(label="Post reminder now", style=discord.ButtonStyle.secondary, row=2)
+    async def ask(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if not await admin_only(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        await interaction.client.qc_ask()
+        await interaction.followup.send("Reminder posted.", ephemeral=True)
+
+    @discord.ui.button(label="Repost board", style=discord.ButtonStyle.secondary, row=2)
+    async def board(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if not await admin_only(interaction):
+            return
+        await interaction.response.defer(ephemeral=True)
+        await interaction.client.qc_refresh_board(repost=True)
+        await interaction.followup.send("Board reposted at the bottom of the channel.", ephemeral=True)
+
+    @discord.ui.button(label="Post results", style=discord.ButtonStyle.secondary, row=2)
+    async def final(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.send_message("Post the final results in the channel now?",
+                                                    view=ConfirmView("final"), ephemeral=True)
+
+    @discord.ui.button(label="Reset test data", style=discord.ButtonStyle.danger, row=3)
+    async def reset(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.send_message(
+                "**QP updates only** keeps the player list. **Everything** also removes players, dates and channel. "
+                "This can't be undone.", view=ResetView(), ephemeral=True)
+
+
+@app_commands.command(name="qp_settings", description="Quest competition: settings and players (admins)")
+async def qp_settings_cmd(interaction: discord.Interaction) -> None:
+    if not await admin_only(interaction):
+        return
+    await interaction.response.send_message(await panel_text(interaction.client.qc, interaction.client),
+                                            view=SettingsView(), ephemeral=True)
+
+
+# ---- add, import, find
+
+def read_group(text: str) -> str | None:
+    t = text.strip().lower()
+    return {"l": "low", "low": "low", "m": "medium", "med": "medium", "medium": "medium",
+            "h": "high", "high": "high"}.get(t) if t else ""
+
+
+class AddModal(discord.ui.Modal, title="Add a player"):
+    rsn = discord.ui.TextInput(label="RuneScape name", max_length=12)
+    qp = discord.ui.TextInput(label="Quest Points now (optional)", required=False, max_length=4, placeholder="e.g. 139")
+    group = discord.ui.TextInput(label="Group: low, medium or high (optional)", required=False, max_length=6,
+                                 placeholder="Empty: picked from their QP")
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        qc: QCStore = interaction.client.qc
+        rsn, raw_qp = str(self.rsn.value).strip(), str(self.qp.value).strip()
+        grp = read_group(str(self.group.value))
+        if grp is None:
+            await interaction.response.send_message("Group must be low, medium or high.", ephemeral=True)
+            return
+        if raw_qp and not raw_qp.isdigit():
+            await interaction.response.send_message("Quest Points must be a number.", ephemeral=True)
+            return
+        existing = await qc.player(rsn)
+        if not grp:
+            if existing:
+                grp = existing["grp"]
+            elif raw_qp:
+                grp = auto_group(int(raw_qp), int(await qc.setting("low_max", DEFAULT_LOW_MAX)),
+                                 int(await qc.setting("medium_max", DEFAULT_MEDIUM_MAX)))
+            else:
+                await interaction.response.send_message("Fill in their QP or a group, so I know where they go.", ephemeral=True)
+                return
+        await qc.upsert_player(rsn, grp, None, None)
+        if raw_qp:
+            await qc.add_entry(rsn, int(raw_qp), interaction.user.id, "admin")
+        await interaction.client.qc_refresh_board()
+        p = await qc.player(rsn)
+        await interaction.response.send_message(
+            f"{'Updated' if existing else 'Added'} **{p['rsn']}** in the {GROUP_NAMES[grp].lower()}"
+            + (f" with {raw_qp} QP" if raw_qp else "") + ".\nPick their Discord account so they can update their own QP:",
+            view=PlayerView(p["rsn"]), ephemeral=True)
+
+
+class ImportModal(discord.ui.Modal, title="Import players"):
+    text = discord.ui.TextInput(
+        label="One per line: name, QP, group (group optional)", style=discord.TextStyle.paragraph,
+        placeholder="Wez, 313\nKodageist, 114/346, low\nBeanTown Dad, 1, medium", max_length=4000)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        qc: QCStore = interaction.client.qc
+        low_max = int(await qc.setting("low_max", DEFAULT_LOW_MAX))
+        med_max = int(await qc.setting("medium_max", DEFAULT_MEDIUM_MAX))
+        done, bad = [], []
+        for line in str(self.text.value).splitlines():
+            if not line.strip():
+                continue
+            m = re.fullmatch(r"\s*(.+?)\s*[,;\t|]\s*(\d+)(?:\s*/\s*\d+)?\s*(?:[,;\t|]\s*(low|medium|med|high))?\s*", line, re.I)
+            if not m:
+                bad.append(line.strip())
+                continue
+            rsn, qp, grp = m.group(1), int(m.group(2)), read_group(m.group(3) or "")
+            await qc.upsert_player(rsn, grp or auto_group(qp, low_max, med_max), None, None)
+            await qc.add_entry(rsn, qp, interaction.user.id, "import")
+            done.append(rsn)
+        await interaction.client.qc_refresh_board()
+        msg = f"Imported {len(done)} player(s): {', '.join(done)}." if done else "Nothing imported."
+        if bad:
+            msg += "\nCouldn't read: " + "; ".join(bad[:10]) + ". Use name, QP per line."
+        if done:
+            msg += "\nUse Edit player to link their Discord accounts or fix a group."
+        await interaction.response.send_message(msg[:2000], ephemeral=True)
+
+
+class FindModal(discord.ui.Modal, title="Edit a player"):
+    rsn = discord.ui.TextInput(label="RuneScape name", max_length=12)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        p = await interaction.client.qc.player(str(self.rsn.value).strip())
+        if not p:
+            await interaction.response.send_message("No player with that name.", ephemeral=True)
+            return
+        await interaction.response.send_message(await player_card(interaction.client.qc, p["rsn"]),
+                                                view=PlayerView(p["rsn"]), ephemeral=True)
+
+
+class PickView(discord.ui.View):
+    def __init__(self, players: list[dict]) -> None:
+        super().__init__(timeout=900)
+        sel = discord.ui.Select(placeholder="Player", options=[
+            discord.SelectOption(label=p["rsn"], value=p["rsn"], description=GROUP_NAMES[p["grp"]]) for p in players[:25]])
+        sel.callback = self.pick
+        self.sel = sel
+        self.add_item(sel)
+
+    async def pick(self, interaction: discord.Interaction) -> None:
+        if not await admin_only(interaction):
+            return
+        rsn = self.sel.values[0]
+        await interaction.response.edit_message(content=await player_card(interaction.client.qc, rsn), view=PlayerView(rsn))
+
+
+# ---- one player
+
+async def player_card(qc: QCStore, rsn: str) -> str:
+    p = await qc.player(rsn)
+    if not p:
+        return f"{rsn} is no longer in the competition."
+    groups, start, end, mx = await qc.standings()
+    r = next((x for x in groups.get(p["grp"], []) if x.rsn.lower() == p["rsn"].lower()), None)
+    who = f"<@{p['user_id']}>" if p["user_id"] else "not linked to Discord"
+    if r and r.current is not None:
+        nums = f"Start {r.start}{' (fixed)' if p['start_qp'] is not None else ''}, now {r.current}, gained {r.gain}."
+    else:
+        nums = "No QP yet."
+    return (f"**{p['rsn']}**: {GROUP_NAMES[p['grp']].lower()}, {who}.\n{nums}\n\n**Updates**\n"
+            + await history_text(qc, p))[:2000]
+
+
+class QPEditModal(discord.ui.Modal):
+    value = discord.ui.TextInput(label="Quest Points", max_length=4)
+
+    def __init__(self, rsn: str, which: str) -> None:
+        super().__init__(title=f"{'Starting' if which == 'start' else 'Current'} QP for {rsn}"[:45])
+        self.rsn, self.which = rsn, which
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw = str(self.value.value).strip()
+        if not raw.isdigit():
+            await interaction.response.send_message("Type a number.", ephemeral=True)
+            return
+        qc: QCStore = interaction.client.qc
+        if self.which == "start":
+            await qc.set_start(self.rsn, int(raw))
+        else:
+            await qc.add_entry(self.rsn, int(raw), interaction.user.id, "admin")
+        await interaction.client.qc_refresh_board()
+        await interaction.response.edit_message(content=await player_card(qc, self.rsn), view=PlayerView(self.rsn))
+
+
+class PlayerView(discord.ui.View):
+    def __init__(self, rsn: str) -> None:
+        super().__init__(timeout=900)
+        self.rsn = rsn
+        link = discord.ui.UserSelect(placeholder="Link their Discord account", row=0)
+        link.callback = self.link
+        self.link_select = link
+        self.add_item(link)
+        grp = discord.ui.Select(placeholder="Move to another group", row=1, options=[
+            discord.SelectOption(label=GROUP_NAMES[g], value=g) for g in GROUPS])
+        grp.callback = self.move
+        self.grp_select = grp
+        self.add_item(grp)
+
+    async def link(self, interaction: discord.Interaction) -> None:
+        if not await admin_only(interaction):
+            return
+        qc: QCStore = interaction.client.qc
+        user = self.link_select.values[0]
+        await qc.conn.execute("UPDATE qc_players SET user_id=? WHERE rsn=?", (user.id, self.rsn))
+        await qc.conn.commit()
+        await interaction.response.edit_message(content=await player_card(qc, self.rsn), view=PlayerView(self.rsn))
+
+    async def move(self, interaction: discord.Interaction) -> None:
+        if not await admin_only(interaction):
+            return
+        qc: QCStore = interaction.client.qc
+        await qc.conn.execute("UPDATE qc_players SET grp=? WHERE rsn=?", (self.grp_select.values[0], self.rsn))
+        await qc.conn.commit()
+        await interaction.client.qc_refresh_board()
+        await interaction.response.edit_message(content=await player_card(qc, self.rsn), view=PlayerView(self.rsn))
+
+    @discord.ui.button(label="Set current QP", style=discord.ButtonStyle.primary, row=2)
+    async def cur(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.send_modal(QPEditModal(self.rsn, "current"))
+
+    @discord.ui.button(label="Set starting QP", style=discord.ButtonStyle.secondary, row=2)
+    async def start(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.send_modal(QPEditModal(self.rsn, "start"))
+
+    @discord.ui.button(label="Remove player", style=discord.ButtonStyle.danger, row=2)
+    async def remove(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.edit_message(content=f"Remove **{self.rsn}** and all their updates?",
+                                                    view=ConfirmView("remove", self.rsn))
+
+
+# ---- settings pieces
+
+class DatesModal(discord.ui.Modal, title="Dates and limits"):
+    def __init__(self, start: str, end: str, max_qp: int, limits: str, ask_hour) -> None:
+        super().__init__()
+        self.start = discord.ui.TextInput(label="Start (Amsterdam time)", default=start, max_length=16)
+        self.end = discord.ui.TextInput(label="End (Amsterdam time)", default=end, max_length=16)
+        self.max_qp = discord.ui.TextInput(label="QP needed for the Quest Cape", default=str(max_qp), max_length=4)
+        self.limits = discord.ui.TextInput(label="Top QP of low / medium group", default=limits, max_length=9)
+        self.ask_hour = discord.ui.TextInput(label="Daily reminder hour (0 to 23)", default=str(ask_hour), max_length=2)
+        for x in (self.start, self.end, self.max_qp, self.limits, self.ask_hour):
+            self.add_item(x)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        qc: QCStore = interaction.client.qc
+        s, e = parse_local(str(self.start.value)), parse_local(str(self.end.value))
+        lim = re.fullmatch(r"\s*(\d+)\s*/\s*(\d+)\s*", str(self.limits.value))
+        mx, hour = str(self.max_qp.value).strip(), str(self.ask_hour.value).strip()
+        problems = []
+        if not s or not e:
+            problems.append("dates must look like 2026-11-07 22:00")
+        elif e <= s:
+            problems.append("the end must be after the start")
+        if not lim or int(lim.group(1)) >= int(lim.group(2)):
+            problems.append("limits must look like 150/280")
+        if not mx.isdigit():
+            problems.append("max QP must be a number")
+        if not hour.isdigit() or not 0 <= int(hour) <= 23:
+            problems.append("the reminder hour must be 0 to 23")
+        if problems:
+            await interaction.response.send_message("Not saved: " + "; ".join(problems) + ".", ephemeral=True)
+            return
+        old_s, old_e = await qc.window()
+        if (s, e) != (old_s, old_e):
+            for k in ("final_posted", "last_call"):
+                await qc.put(k, "")
+        for k, v in (("start", s), ("end", e), ("max_qp", int(mx)), ("low_max", int(lim.group(1))),
+                     ("medium_max", int(lim.group(2))), ("ask_hour", int(hour))):
+            await qc.put(k, v)
+        await interaction.client.qc_refresh_board()
+        await interaction.response.edit_message(content=await panel_text(qc, interaction.client), view=SettingsView())
+
+
+class ChannelView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+        sel = discord.ui.ChannelSelect(placeholder="Channel", channel_types=[discord.ChannelType.text])
+        sel.callback = self.pick
+        self.sel = sel
+        self.add_item(sel)
+
+    async def pick(self, interaction: discord.Interaction) -> None:
+        if not await admin_only(interaction):
+            return
+        ch = self.sel.values[0]
+        await interaction.client.qc.put("channel", ch.id)
+        await interaction.response.defer(ephemeral=True)
+        await interaction.client.qc_refresh_board()
+        await interaction.edit_original_response(content=f"The board and reminders now go to {ch.mention}.", view=None)
+
+
+class ResetView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+
+    async def _do(self, interaction: discord.Interaction, everything: bool) -> None:
+        if not await admin_only(interaction):
+            return
+        await interaction.client.qc.reset(everything)
+        await interaction.client.qc_refresh_board()
+        await interaction.response.edit_message(
+            content="Wiped." + (" Dates and channel are back to the defaults." if everything else ""), view=None)
+
+    @discord.ui.button(label="QP updates only", style=discord.ButtonStyle.danger)
+    async def entries(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._do(interaction, False)
+
+    @discord.ui.button(label="Everything", style=discord.ButtonStyle.danger)
+    async def everything(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await self._do(interaction, True)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await interaction.response.edit_message(content="Nothing changed.", view=None)
+
+
+class ConfirmView(discord.ui.View):
+    def __init__(self, action: str, rsn: str | None = None) -> None:
+        super().__init__(timeout=300)
+        self.action, self.rsn = action, rsn
+
+    @discord.ui.button(label="Yes", style=discord.ButtonStyle.danger)
+    async def yes(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if not await admin_only(interaction):
+            return
+        if self.action == "remove":
+            await interaction.client.qc.remove_player(self.rsn)
+            await interaction.client.qc_refresh_board()
+            await interaction.response.edit_message(content=f"Removed {self.rsn}.", view=None)
+        else:
+            await interaction.response.edit_message(content="Posting results...", view=None)
+            await interaction.client.qc_final()
+            await interaction.edit_original_response(content="Results posted.")
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def no(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if self.action == "remove":
+            await interaction.response.edit_message(content=await player_card(interaction.client.qc, self.rsn),
+                                                    view=PlayerView(self.rsn))
+        else:
+            await interaction.response.edit_message(content="Nothing changed.", view=None)
 
 
 # ------------------------------------------------------------ bot mixin
@@ -442,7 +912,7 @@ class QuestCompMixin:
         await self.qc.setup()
         self.add_view(QPView())
         self.tree.add_command(qp_cmd)
-        self.tree.add_command(qc_group)
+        self.tree.add_command(qp_settings_cmd)
         self.qc_loop.start()
 
     async def qc_channel(self):
@@ -476,9 +946,9 @@ class QuestCompMixin:
                 pass
             msg = None
         if msg:
-            await msg.edit(embeds=embeds)
+            await msg.edit(embeds=embeds, view=QPView())
         else:
-            msg = await ch.send(embeds=embeds)
+            msg = await ch.send(embeds=embeds, view=QPView())
             await self.store.set(key, str(msg.id))
 
     async def qc_ask(self, last_call: bool = False) -> None:
@@ -498,7 +968,7 @@ class QuestCompMixin:
         elif now < start:
             text = f"The Quest Competition starts <t:{start}:R>. Report your QP now so we know your starting point."
         else:
-            text = "Daily check-in: how many Quest Points do you have now? Press the button or use /qp."
+            text = "Daily check-in: how many Quest Points do you have now? Press the button below."
         if stale:
             text += "\n" + " ".join(f"<@{u}>" for u in stale)
         old = await self.store.get(f"qc:msg:ask:{ch.id}")
@@ -549,233 +1019,3 @@ class QuestCompMixin:
         await self.wait_until_ready()
 
 
-# ------------------------------------------------------------ commands
-
-async def rsn_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
-    qc: QCStore = interaction.client.qc
-    players = await qc.players()
-    if not is_admin(interaction):
-        players = [p for p in players if p["user_id"] == interaction.user.id]
-    cur = current.lower()
-    return [app_commands.Choice(name=p["rsn"], value=p["rsn"]) for p in players if cur in p["rsn"].lower()][:25]
-
-
-@app_commands.command(name="qp", description="Update your Quest Points for the quest competition")
-@app_commands.describe(qp="Your Quest Points right now", rsn="Which account (only if you have more than one)",
-                       proof="Optional screenshot of your quest list")
-@app_commands.autocomplete(rsn=rsn_autocomplete)
-async def qp_cmd(interaction: discord.Interaction, qp: app_commands.Range[int, 0, 1000], rsn: str | None = None,
-                 proof: discord.Attachment | None = None) -> None:
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    text = await submit(interaction.client, interaction, qp, rsn, proof.url if proof else None)
-    await interaction.followup.send(text, ephemeral=True)
-
-
-qc_group = app_commands.Group(name="qc", description="Quest competition")
-
-
-async def _deny(interaction: discord.Interaction) -> bool:
-    if is_admin(interaction):
-        return False
-    await interaction.response.send_message(
-        TEST_MSG if TEST_MODE else "Only competition admins can do this.", ephemeral=True)
-    return True
-
-
-@qc_group.command(name="add", description="Add or update a participant (admin)")
-@app_commands.describe(rsn="RuneScape name", member="Their Discord account, so they can update their own QP",
-                       group="Leave empty to pick by starting QP", start_qp="Starting QP (empty: their first report)")
-@app_commands.choices(group=[app_commands.Choice(name=GROUP_NAMES[g], value=g) for g in GROUPS])
-async def qc_add(interaction: discord.Interaction, rsn: str, member: discord.Member | None = None,
-                 group: str | None = None, start_qp: app_commands.Range[int, 0, 1000] | None = None) -> None:
-    if await _deny(interaction):
-        return
-    qc: QCStore = interaction.client.qc
-    rsn = rsn.strip()
-    existing = await qc.player(rsn)
-    if group is None:
-        if existing:
-            group = existing["grp"]
-        elif start_qp is not None:
-            group = auto_group(start_qp, int(await qc.setting("low_max", DEFAULT_LOW_MAX)),
-                               int(await qc.setting("medium_max", DEFAULT_MEDIUM_MAX)))
-        else:
-            await interaction.response.send_message("Pick a group, or give a start_qp so I can pick one.", ephemeral=True)
-            return
-    await qc.upsert_player(rsn, group, member.id if member else None, start_qp)
-    await interaction.client.qc_refresh_board()
-    who = f", linked to {member.mention}" if member else ""
-    await interaction.response.send_message(
-        f"{'Updated' if existing else 'Added'} {rsn} in the {GROUP_NAMES[group].lower()}{who}"
-        + (f", starting at {start_qp} QP" if start_qp is not None else "") + ".", ephemeral=True)
-
-
-@qc_group.command(name="import", description="Add many participants at once (admin)")
-async def qc_import(interaction: discord.Interaction) -> None:
-    if await _deny(interaction):
-        return
-    await interaction.response.send_modal(ImportModal())
-
-
-class ImportModal(discord.ui.Modal, title="Import participants"):
-    text = discord.ui.TextInput(
-        label="One per line: name, QP, group (group optional)", style=discord.TextStyle.paragraph,
-        placeholder="Wez, 313\nKodageist, 114/346, low\nBeanTown Dad, 1, medium", max_length=4000)
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        qc: QCStore = interaction.client.qc
-        low_max = int(await qc.setting("low_max", DEFAULT_LOW_MAX))
-        med_max = int(await qc.setting("medium_max", DEFAULT_MEDIUM_MAX))
-        done, bad = [], []
-        for line in str(self.text.value).splitlines():
-            if not line.strip():
-                continue
-            m = re.fullmatch(r"\s*(.+?)\s*[,;\t|]\s*(\d+)(?:\s*/\s*\d+)?\s*(?:[,;\t|]\s*(low|medium|med|high))?\s*", line, re.I)
-            if not m:
-                bad.append(line.strip())
-                continue
-            rsn, qp, grp = m.group(1), int(m.group(2)), (m.group(3) or "").lower()
-            grp = "medium" if grp == "med" else grp or auto_group(qp, low_max, med_max)
-            await qc.upsert_player(rsn, grp, None, None)
-            await qc.add_entry(rsn, qp, interaction.user.id, "import")
-            done.append(f"{rsn} ({qp}, {grp})")
-        await interaction.client.qc_refresh_board()
-        msg = f"Imported {len(done)}: " + ", ".join(done) if done else "Nothing imported."
-        if bad:
-            msg += "\nCouldn't read: " + "; ".join(bad[:10])
-        msg += "\nLink Discord accounts with /qc add rsn member so players can update themselves."
-        await interaction.response.send_message(msg[:2000], ephemeral=True)
-
-
-@qc_group.command(name="remove", description="Remove a participant and their updates (admin)")
-@app_commands.autocomplete(rsn=rsn_autocomplete)
-async def qc_remove(interaction: discord.Interaction, rsn: str) -> None:
-    if await _deny(interaction):
-        return
-    ok = await interaction.client.qc.remove_player(rsn)
-    await interaction.client.qc_refresh_board()
-    await interaction.response.send_message(f"Removed {rsn}." if ok else f"No participant called {rsn}.", ephemeral=True)
-
-
-@qc_group.command(name="set", description="Correct someone's QP (admin)")
-@app_commands.describe(rsn="RuneScape name", qp="The right QP", which="Current QP (default) or starting QP")
-@app_commands.choices(which=[app_commands.Choice(name="Current QP", value="current"),
-                             app_commands.Choice(name="Starting QP", value="start")])
-@app_commands.autocomplete(rsn=rsn_autocomplete)
-async def qc_set(interaction: discord.Interaction, rsn: str, qp: app_commands.Range[int, 0, 1000], which: str = "current") -> None:
-    if await _deny(interaction):
-        return
-    qc: QCStore = interaction.client.qc
-    p = await qc.player(rsn)
-    if not p:
-        await interaction.response.send_message(f"No participant called {rsn}.", ephemeral=True)
-        return
-    if which == "start":
-        await qc.set_start(p["rsn"], qp)
-    else:
-        await qc.add_entry(p["rsn"], qp, interaction.user.id, "admin")
-    await interaction.client.qc_refresh_board()
-    await interaction.response.send_message(f"{p['rsn']}: {'starting' if which == 'start' else 'current'} QP set to {qp}.",
-                                            ephemeral=True)
-
-
-@qc_group.command(name="history", description="Someone's QP updates")
-@app_commands.autocomplete(rsn=rsn_autocomplete)
-async def qc_history(interaction: discord.Interaction, rsn: str) -> None:
-    if not can_play(interaction.user):
-        await interaction.response.send_message(TEST_MSG, ephemeral=True)
-        return
-    qc: QCStore = interaction.client.qc
-    p = await qc.player(rsn)
-    if not p:
-        await interaction.response.send_message(f"No participant called {rsn}.", ephemeral=True)
-        return
-    rows = await qc.history(p["rsn"])
-    lines = []
-    for ts, qp, by_user, proof in rows:
-        src = {"import": " (imported)", "admin": " (set by admin)"}.get(proof or "", "")
-        link = f" [screenshot]({proof})" if proof and proof.startswith("http") else ""
-        lines.append(f"<t:{ts}:f>: {qp} QP{src}{link}")
-    head = f"**{p['rsn']}**, {GROUP_NAMES[p['grp']].lower()}" + (f", start fixed at {p['start_qp']}" if p["start_qp"] is not None else "")
-    await interaction.response.send_message(head + "\n" + ("\n".join(lines) or "No updates yet."), ephemeral=True)
-
-
-@qc_group.command(name="board", description="Repost the leaderboard at the bottom of the channel (admin)")
-async def qc_board(interaction: discord.Interaction) -> None:
-    if await _deny(interaction):
-        return
-    await interaction.response.defer(ephemeral=True)
-    await interaction.client.qc_refresh_board(repost=True)
-    await interaction.followup.send("Leaderboard reposted.", ephemeral=True)
-
-
-@qc_group.command(name="ask", description="Post the QP reminder with the button now (admin)")
-async def qc_ask(interaction: discord.Interaction) -> None:
-    if await _deny(interaction):
-        return
-    await interaction.response.defer(ephemeral=True)
-    await interaction.client.qc_ask()
-    await interaction.followup.send("Reminder posted.", ephemeral=True)
-
-
-@qc_group.command(name="final", description="Post the final results now (admin)")
-async def qc_final(interaction: discord.Interaction) -> None:
-    if await _deny(interaction):
-        return
-    await interaction.response.defer(ephemeral=True)
-    await interaction.client.qc_final()
-    await interaction.followup.send("Results posted.", ephemeral=True)
-
-
-@qc_group.command(name="settings", description="Dates, channel, max QP and group limits (admin)")
-@app_commands.describe(start="Amsterdam time, e.g. 2026-11-07 22:00", end="Amsterdam time, e.g. 2026-11-14 22:00",
-                       channel="Where the board and reminders go", max_qp="QP needed for the Quest Cape",
-                       low_max="Highest starting QP in the low group", medium_max="Highest starting QP in the medium group",
-                       ask_hour="Hour of the daily reminder (Amsterdam time)")
-async def qc_settings(interaction: discord.Interaction, start: str | None = None, end: str | None = None,
-                      channel: discord.TextChannel | None = None, max_qp: app_commands.Range[int, 1, 1000] | None = None,
-                      low_max: int | None = None, medium_max: int | None = None,
-                      ask_hour: app_commands.Range[int, 0, 23] | None = None) -> None:
-    if await _deny(interaction):
-        return
-    qc: QCStore = interaction.client.qc
-    for name, raw in (("start", start), ("end", end)):
-        if raw:
-            ts = parse_local(raw)
-            if not ts:
-                await interaction.response.send_message(f"I can't read {raw}. Use 2026-11-07 22:00.", ephemeral=True)
-                return
-            await qc.put(name, ts)
-            await qc.put("final_posted", "")
-            await qc.put("last_call", "")
-    for name, val in (("max_qp", max_qp), ("low_max", low_max), ("medium_max", medium_max), ("ask_hour", ask_hour)):
-        if val is not None:
-            await qc.put(name, val)
-    if channel:
-        await qc.put("channel", channel.id)
-    s, e = await qc.window()
-    ch = await interaction.client.qc_channel()
-    await interaction.client.qc_refresh_board()
-    await interaction.response.send_message(
-        f"Start {fmt_local(s)}, end {fmt_local(e)} (Amsterdam).\n"
-        f"Channel {ch.mention if ch else 'not found'}. Quest Cape at {await qc.max_qp()} QP.\n"
-        f"Groups by starting QP: low up to {await qc.setting('low_max', DEFAULT_LOW_MAX)}, "
-        f"medium up to {await qc.setting('medium_max', DEFAULT_MEDIUM_MAX)}, high above.\n"
-        f"Daily reminder at {await qc.setting('ask_hour', DEFAULT_ASK_HOUR)}:00. "
-        f"Test mode is {'on' if TEST_MODE else 'off'}.", ephemeral=True)
-
-
-@qc_group.command(name="reset", description="Wipe test data (admin)")
-@app_commands.describe(what="Updates only keeps the participant list; everything also removes players and settings")
-@app_commands.choices(what=[app_commands.Choice(name="QP updates only", value="entries"),
-                            app_commands.Choice(name="Everything", value="all")])
-async def qc_reset(interaction: discord.Interaction, what: str, confirm: bool = False) -> None:
-    if await _deny(interaction):
-        return
-    if not confirm:
-        await interaction.response.send_message("Run it again with confirm: True. This can't be undone.", ephemeral=True)
-        return
-    await interaction.client.qc.reset(what == "all")
-    await interaction.client.qc_refresh_board()
-    await interaction.response.send_message("Wiped." + (" Dates and channel are back to the defaults." if what == "all" else ""),
-                                            ephemeral=True)
