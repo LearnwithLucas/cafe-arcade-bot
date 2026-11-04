@@ -169,6 +169,13 @@ class QCStore:
     async def setup(self) -> None:
         await self.conn.executescript(SCHEMA)
         await self.conn.commit()
+        PANEL_ADMINS.clear()
+        PANEL_ADMINS.update(_ids(await self.setting("admins", "")))
+
+    async def set_admins(self, ids: set[int]) -> None:
+        await self.put("admins", ",".join(str(i) for i in sorted(ids)))
+        PANEL_ADMINS.clear()
+        PANEL_ADMINS.update(ids)
 
     async def setting(self, key: str, default):
         raw = await self.s.get(f"qc:{key}")
@@ -271,19 +278,22 @@ def is_tester(user: discord.abc.User) -> bool:
     return user.id in TESTER_IDS or (user.name or "").lower() in TESTER_NAMES
 
 
+PANEL_ADMINS: set[int] = set()  # admins added with /qp_settings, loaded from the database at start
+
+
 def is_admin(interaction: discord.Interaction) -> bool:
-    if is_tester(interaction.user):
+    """Testers, QC_ADMIN_IDS and admins added in the panel. Works in test mode too, so admins can prepare."""
+    uid = interaction.user.id
+    if is_tester(interaction.user) or uid in QC_ADMIN_IDS or uid in PANEL_ADMINS:
         return True
-    if TEST_MODE:
+    if TEST_MODE or QC_ADMIN_IDS or PANEL_ADMINS:
         return False
-    if interaction.user.id in QC_ADMIN_IDS:
-        return True
     from .bot import can_configure  # late import, bot.py imports this module
-    return can_configure(interaction)
+    return can_configure(interaction)  # nobody set yet: anyone who can manage channels
 
 
 def can_play(user: discord.abc.User) -> bool:
-    return is_tester(user) or not TEST_MODE
+    return is_tester(user) or user.id in PANEL_ADMINS or not TEST_MODE
 
 
 TEST_MSG = "The quest competition is still being tested. It opens soon."
@@ -514,6 +524,8 @@ async def panel_text(qc: QCStore, bot) -> str:
             f"Channel: {ch.mention if ch else 'not found'}. Quest Cape at {await qc.max_qp()} QP.\n"
             f"Players: {counts['low']} low, {counts['medium']} medium, {counts['high']} high "
             f"({linked} linked to Discord).\n"
+            f"Admins: {', '.join(f'<@{u}>' for u in sorted(PANEL_ADMINS)) or 'only the testers'}"
+            f"{' plus anyone who can manage channels' if not PANEL_ADMINS and not QC_ADMIN_IDS and not TEST_MODE else ''}.\n"
             f"Groups by starting QP: low up to {await qc.setting('low_max', DEFAULT_LOW_MAX)}, "
             f"medium up to {await qc.setting('medium_max', DEFAULT_MEDIUM_MAX)}, high above. "
             f"Daily reminder at {await qc.setting('ask_hour', DEFAULT_ASK_HOUR)}:00.")
@@ -560,6 +572,11 @@ class SettingsView(discord.ui.View):
     async def channel(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
         if await admin_only(interaction):
             await interaction.response.send_message("Where should the board and reminders go?", view=ChannelView(), ephemeral=True)
+
+    @discord.ui.button(label="Admins", style=discord.ButtonStyle.secondary, row=1)
+    async def admins(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.send_message(admins_text(), view=AdminsView(), ephemeral=True)
 
     @discord.ui.button(label="Post reminder now", style=discord.ButtonStyle.secondary, row=2)
     async def ask(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
@@ -1019,3 +1036,31 @@ class QuestCompMixin:
         await self.wait_until_ready()
 
 
+
+
+def admins_text() -> str:
+    names = ", ".join(f"<@{u}>" for u in sorted(PANEL_ADMINS)) or "none yet"
+    return (f"**Admins**: {names}.\nAdmins can open /qp_settings. To also play, add them as a player and link their Discord "
+            "account, like anyone else.\nPick people below to make them admin. Pick someone who is already admin to remove them.")
+
+
+class AdminsView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+        sel = discord.ui.UserSelect(placeholder="Add or remove admins", min_values=1, max_values=10)
+        sel.callback = self.pick
+        self.sel = sel
+        self.add_item(sel)
+
+    async def pick(self, interaction: discord.Interaction) -> None:
+        if not await admin_only(interaction):
+            return
+        ids = set(PANEL_ADMINS)
+        for u in self.sel.values:
+            if u.bot:
+                continue
+            ids.symmetric_difference_update({u.id})
+        if interaction.user.id not in ids and not is_tester(interaction.user) and interaction.user.id not in QC_ADMIN_IDS:
+            ids.add(interaction.user.id)  # don't let someone lock themselves out
+        await interaction.client.qc.set_admins(ids)
+        await interaction.response.edit_message(content=admins_text(), view=AdminsView())
