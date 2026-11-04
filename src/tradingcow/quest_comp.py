@@ -12,6 +12,7 @@ Turn it off on Render with QC_TEST_MODE=0 when the real competition goes live.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -400,10 +401,7 @@ async def submit(bot, interaction: discord.Interaction, qp: int, rsn: str | None
     if last is not None and qp < last:
         return f"Quest Points can't go down. Your last update for {p['rsn']} was {last} QP. If that was a typo, ask {ORGANISER} to fix it."
     await qc.add_entry(p["rsn"], qp, interaction.user.id, proof)
-    try:
-        await bot.qc_refresh_board()
-    except Exception:
-        log.exception("Board refresh after a QP update failed")
+    bot.qc_refresh_soon()
     if now < start:
         return f"Saved: {p['rsn']} has {qp} QP. This counts as your starting point. The competition starts {fmt_local(start)}."
     gained = ""
@@ -653,7 +651,7 @@ class AddModal(discord.ui.Modal, title="Add a player"):
         await qc.upsert_player(rsn, grp, None, None)
         if raw_qp:
             await qc.add_entry(rsn, int(raw_qp), interaction.user.id, "admin")
-        await interaction.client.qc_refresh_board()
+        interaction.client.qc_refresh_soon()
         p = await qc.player(rsn)
         await interaction.response.send_message(
             f"{'Updated' if existing else 'Added'} **{p['rsn']}** in the {GROUP_NAMES[grp].lower()}"
@@ -667,6 +665,7 @@ class ImportModal(discord.ui.Modal, title="Import players"):
         placeholder="Wez, 313\nKodageist, 114/346, low\nBeanTown Dad, 1, medium", max_length=4000)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True, thinking=True)
         qc: QCStore = interaction.client.qc
         low_max = int(await qc.setting("low_max", DEFAULT_LOW_MAX))
         med_max = int(await qc.setting("medium_max", DEFAULT_MEDIUM_MAX))
@@ -680,15 +679,17 @@ class ImportModal(discord.ui.Modal, title="Import players"):
                 continue
             rsn, qp, grp = m.group(1), int(m.group(2)), read_group(m.group(3) or "")
             await qc.upsert_player(rsn, grp or auto_group(qp, low_max, med_max), None, None)
-            await qc.add_entry(rsn, qp, interaction.user.id, "import")
+            last = await qc.last_qp(rsn)
+            if last is None or qp > last:  # importing the same list twice changes nothing
+                await qc.add_entry(rsn, qp, interaction.user.id, "import")
             done.append(rsn)
-        await interaction.client.qc_refresh_board()
+        interaction.client.qc_refresh_soon()
         msg = f"Imported {len(done)} player(s): {', '.join(done)}." if done else "Nothing imported."
         if bad:
             msg += "\nCouldn't read: " + "; ".join(bad[:10]) + ". Use name, QP per line."
         if done:
             msg += "\nUse Edit player to link their Discord accounts or fix a group."
-        await interaction.response.send_message(msg[:2000], ephemeral=True)
+        await interaction.followup.send(msg[:2000], ephemeral=True)
 
 
 class FindModal(discord.ui.Modal, title="Edit a player"):
@@ -753,7 +754,7 @@ class QPEditModal(discord.ui.Modal):
             await qc.set_start(self.rsn, int(raw))
         else:
             await qc.add_entry(self.rsn, int(raw), interaction.user.id, "admin")
-        await interaction.client.qc_refresh_board()
+        interaction.client.qc_refresh_soon()
         await interaction.response.edit_message(content=await player_card(qc, self.rsn), view=PlayerView(self.rsn))
 
 
@@ -786,7 +787,7 @@ class PlayerView(discord.ui.View):
         qc: QCStore = interaction.client.qc
         await qc.conn.execute("UPDATE qc_players SET grp=? WHERE rsn=?", (self.grp_select.values[0], self.rsn))
         await qc.conn.commit()
-        await interaction.client.qc_refresh_board()
+        interaction.client.qc_refresh_soon()
         await interaction.response.edit_message(content=await player_card(qc, self.rsn), view=PlayerView(self.rsn))
 
     @discord.ui.button(label="Set current QP", style=discord.ButtonStyle.primary, row=2)
@@ -845,7 +846,7 @@ class DatesModal(discord.ui.Modal, title="Dates and limits"):
         for k, v in (("start", s), ("end", e), ("max_qp", int(mx)), ("low_max", int(lim.group(1))),
                      ("medium_max", int(lim.group(2))), ("ask_hour", int(hour))):
             await qc.put(k, v)
-        await interaction.client.qc_refresh_board()
+        interaction.client.qc_refresh_soon()
         await interaction.response.edit_message(content=await panel_text(qc, interaction.client), view=SettingsView())
 
 
@@ -863,7 +864,7 @@ class ChannelView(discord.ui.View):
         ch = self.sel.values[0]
         await interaction.client.qc.put("channel", ch.id)
         await interaction.response.defer(ephemeral=True)
-        await interaction.client.qc_refresh_board()
+        interaction.client.qc_refresh_soon()
         await interaction.edit_original_response(content=f"The board and reminders now go to {ch.mention}.", view=None)
 
 
@@ -875,7 +876,7 @@ class ResetView(discord.ui.View):
         if not await admin_only(interaction):
             return
         await interaction.client.qc.reset(everything)
-        await interaction.client.qc_refresh_board()
+        interaction.client.qc_refresh_soon()
         await interaction.response.edit_message(
             content="Wiped." + (" Dates and channel are back to the defaults." if everything else ""), view=None)
 
@@ -903,7 +904,7 @@ class ConfirmView(discord.ui.View):
             return
         if self.action == "remove":
             await interaction.client.qc.remove_player(self.rsn)
-            await interaction.client.qc_refresh_board()
+            interaction.client.qc_refresh_soon()
             await interaction.response.edit_message(content=f"Removed {self.rsn}.", view=None)
         else:
             await interaction.response.edit_message(content="Posting results...", view=None)
@@ -931,6 +932,22 @@ class QuestCompMixin:
         self.tree.add_command(qp_cmd)
         self.tree.add_command(qp_settings_cmd)
         self.qc_loop.start()
+
+    def qc_refresh_soon(self) -> None:
+        """Update the board in the background, so buttons answer Discord within its 3 seconds."""
+        self._qc_dirty = True
+        task = getattr(self, "_qc_task", None)
+        if task and not task.done():
+            return
+        self._qc_task = asyncio.create_task(self._qc_refresh_worker())
+
+    async def _qc_refresh_worker(self) -> None:
+        while getattr(self, "_qc_dirty", False):
+            self._qc_dirty = False
+            try:
+                await self.qc_refresh_board()
+            except Exception:
+                log.exception("Quest competition board refresh failed")
 
     async def qc_channel(self):
         cid = int(await self.qc.setting("channel", DEFAULT_CHANNEL))
