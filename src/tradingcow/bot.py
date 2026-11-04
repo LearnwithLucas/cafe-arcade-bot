@@ -18,6 +18,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from . import market
+from .quest_comp import QuestCompMixin
 from .store import Store
 from .wiki import Wiki
 
@@ -111,7 +112,7 @@ def parse_gp(text: str) -> int | None:
     return int(float(m.group(1)) * mult)
 
 
-class TradingCow(commands.Bot):
+class TradingCow(QuestCompMixin, commands.Bot):
     def __init__(self, db_path: Path, guild_ids: list[int], alert_channel_id: int | None, dump_min_drop: float) -> None:
         super().__init__(command_prefix="!tc-unused ", intents=discord.Intents.default(), help_command=None)
         self.store = Store(db_path)
@@ -136,6 +137,7 @@ class TradingCow(commands.Bot):
         self.tree.add_command(watch_group)
         for cmd in (price_cmd, flips_cmd, alch_cmd, dumps_cmd, skill_cmd, channel_cmd, channels_cmd, guide_cmd, help_cmd):
             self.tree.add_command(cmd)
+        await self.qc_setup()  # quest competition: /qp, /qc and its loop
         if self.guild_ids:
             for gid in self.guild_ids:
                 g = discord.Object(id=gid)
@@ -153,7 +155,7 @@ class TradingCow(commands.Bot):
         self.backfill_task = asyncio.create_task(self.backfill())
 
     async def close(self) -> None:
-        for loop in (self.price_loop, self.hour_loop, self.dump_loop, self.board_loop, self.guide_loop):
+        for loop in (self.price_loop, self.hour_loop, self.dump_loop, self.board_loop, self.guide_loop, self.qc_loop):
             loop.cancel()
         if self.backfill_task:
             self.backfill_task.cancel()
@@ -688,7 +690,9 @@ async def help_cmd(interaction: discord.Interaction) -> None:
         "/skill skill: top 10 most profitable methods right now (level optional)\n"
         "/watch add, list, remove: price alerts (posted in the general channel)\n"
         "/tc_channel, /tc_channels: where automatic posts go\n"
-        "/tc_guide: repost the channel explainers now\n\n"
+        "/tc_guide: repost the channel explainers now\n"
+        "/qp: update your Quest Points for the quest competition\n"
+        "/qc: quest competition board, history and admin tools\n\n"
         "Prices come from the OSRS Wiki. The bot never touches your account."))
     await interaction.response.send_message(embed=e, ephemeral=True)
 
