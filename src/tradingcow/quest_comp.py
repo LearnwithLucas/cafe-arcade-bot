@@ -661,7 +661,7 @@ class AddModal(discord.ui.Modal, title="Add a player"):
 
 class ImportModal(discord.ui.Modal, title="Import players"):
     text = discord.ui.TextInput(
-        label="One per line: name, QP, group (group optional)", style=discord.TextStyle.paragraph,
+        label="One player per line: name, QP, group", style=discord.TextStyle.paragraph,
         placeholder="Wez, 313\nKodageist, 114/346, low\nBeanTown Dad, 1, medium", max_length=4000)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
