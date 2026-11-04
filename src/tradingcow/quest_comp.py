@@ -598,6 +598,11 @@ class SettingsView(discord.ui.View):
             await interaction.response.send_message("Post the final results in the channel now?",
                                                     view=ConfirmView("final"), ephemeral=True)
 
+    @discord.ui.button(label="Admin guide", style=discord.ButtonStyle.primary, row=3)
+    async def guide(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.send_message(embed=await guide_embed(interaction.client.qc), ephemeral=True)
+
     @discord.ui.button(label="Reset test data", style=discord.ButtonStyle.danger, row=3)
     async def reset(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
         if await admin_only(interaction):
@@ -1081,3 +1086,34 @@ class AdminsView(discord.ui.View):
             ids.add(interaction.user.id)  # don't let someone lock themselves out
         await interaction.client.qc.set_admins(ids)
         await interaction.response.edit_message(content=admins_text(), view=AdminsView())
+
+
+async def guide_embed(qc: QCStore) -> discord.Embed:
+    low = await qc.setting("low_max", DEFAULT_LOW_MAX)
+    med = await qc.setting("medium_max", DEFAULT_MEDIUM_MAX)
+    hour = await qc.setting("ask_hour", DEFAULT_ASK_HOUR)
+    e = discord.Embed(title="Quest competition: admin guide", color=COLOR, description=(
+        "Everything happens in **/qp_settings**. Only admins see these buttons and replies.\n\n"
+        "**Add a player**\n"
+        "Press **Add player**. Fill in their RuneScape name and their QP right now. "
+        f"Leave the group empty and the bot picks it: up to {low} QP is low, up to {med} is medium, above that is high. "
+        "Then pick their Discord account in the dropdown, so they can update their own QP. "
+        "Without a linked account they can't use the buttons.\n\n"
+        "**Fix a player**\n"
+        "Press **Edit player** and pick the name. From there you can link Discord, move them to another group, "
+        "set their current or starting QP, or remove them. Use this for typos: players can't lower their own QP.\n\n"
+        "**How the score works**\n"
+        "Starting QP is the last number reported before the start. "
+        "Low and medium: most QP gained wins. High: the first two to reach the Quest Cape win. "
+        "Nothing changes after the end.\n\n"
+        "**What the bot does by itself**\n"
+        f"It keeps the leaderboard up to date, posts a reminder every day at {hour}:00 and pings players "
+        "who didn't update in the last 20 hours. Two hours before the end it posts a last call, "
+        "and at the end it posts the winners.\n\n"
+        "**Other buttons**\n"
+        "**Repost board** moves the leaderboard to the bottom of the channel. "
+        "**Post reminder now** posts the update button straight away. "
+        "**Dates and limits** and **Channel** change the setup. "
+        "**Admins** adds or removes admins. Leave **Post results** and **Reset test data** to Lucas."))
+    e.set_footer(text="Players only need the Update my QP button, or /qp.")
+    return e
