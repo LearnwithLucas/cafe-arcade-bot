@@ -69,7 +69,12 @@ class YouTube:
         return items[0] if items else None
 
     async def recent_uploads(self, uploads_playlist: str, limit: int = 50) -> list[str]:
-        j = await self._get("playlistItems", part="contentDetails", playlistId=uploads_playlist, maxResults=min(50, limit))
+        try:
+            j = await self._get("playlistItems", part="contentDetails", playlistId=uploads_playlist, maxResults=min(50, limit))
+        except RuntimeError as e:
+            if " 404:" in str(e):  # a channel with no public videos has no uploads playlist yet
+                return []
+            raise
         return [it["contentDetails"]["videoId"] for it in j.get("items", [])]
 
     async def channel_playlists(self, channel_id: str) -> list[tuple[str, str]]:

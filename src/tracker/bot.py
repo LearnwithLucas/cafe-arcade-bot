@@ -197,7 +197,10 @@ class Tracker(commands.Bot):
             await self.auto_watch_youtube()
             await self.ensure_channels()
             for c in await self.store.rows("SELECT * FROM channels"):
-                await self.sync_channel(c)
+                try:
+                    await self.sync_channel(c)
+                except Exception as e:  # one bad channel must not stop the others
+                    log.warning("Tracker YouTube sync failed for %s (%s): %s", c.get("title"), c.get("channel_id"), e)
             await self.check_milestones()
             await self.check_ratings()
         except Exception:
