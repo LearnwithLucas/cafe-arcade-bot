@@ -33,7 +33,7 @@ TZ = ZoneInfo("Europe/Amsterdam")
 COLOR = 0x4FA3D9
 ORGANISER = os.getenv("QC_ORGANISER", "@Killi0naire8")
 TIERS = ("Novice", "Intermediate", "Experienced", "Master", "Grandmaster")
-QUEST_INFO = {name.lower(): (name, diff, POINTS[diff]) for name, diff in QUESTS}
+QUEST_INFO = {name.lower(): (name, diff, POINTS[diff], qp) for name, diff, qp in QUESTS}  # name, tier, points, QP
 
 
 def _ids(raw: str) -> set[int]:
@@ -63,6 +63,14 @@ CREATE TABLE IF NOT EXISTS qc_players (
     grp TEXT NOT NULL,
     start_qp INTEGER,
     added INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS qc_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rsn TEXT NOT NULL COLLATE NOCASE,
+    qp INTEGER NOT NULL,
+    ts INTEGER NOT NULL,
+    by_user INTEGER,
+    proof TEXT
 );
 CREATE TABLE IF NOT EXISTS qc_done (
     rsn TEXT NOT NULL COLLATE NOCASE,
@@ -108,7 +116,7 @@ def _norm(s: str) -> str:
 def search_quests(term: str, exclude: set[str] = frozenset(), limit: int = 25) -> list[str]:
     """Quest names matching what someone typed: exact, then starts with, then a word starts with, then contains."""
     t = _norm(term)
-    pool = [name for name, _ in QUESTS if name.lower() not in exclude]
+    pool = [q[0] for q in QUESTS if q[0].lower() not in exclude]
     if not t:
         return sorted(pool, key=str.lower)[:limit]
     if t == "rfd":
@@ -123,7 +131,7 @@ def search_quests(term: str, exclude: set[str] = frozenset(), limit: int = 25) -
 
 
 def quest_label(name: str) -> str:
-    _, diff, pts = QUEST_INFO[name.lower()]
+    _, diff, pts, _qp = QUEST_INFO[name.lower()]
     return f"{diff}, {points_text(pts)}"
 
 
@@ -165,6 +173,37 @@ def build_rows(players: list[dict], done: list[tuple], start: int, end: int) -> 
     return sorted(rows.values(), key=lambda r: (-r.points, r.last_ts or 1 << 62, r.rsn.lower()))
 
 
+@dataclass
+class QPCheck:
+    start: int | None       # QP before the competition
+    logged: int             # QP of the quests logged during the competition
+    reported: int | None    # latest QP the player reported during the competition
+    reported_at: int | None
+
+    @property
+    def expected(self) -> int | None:
+        return None if self.start is None else self.start + self.logged
+
+    @property
+    def status(self) -> str:
+        if self.start is None:
+            return "no starting QP"
+        if self.reported is None:
+            return "not checked yet"
+        diff = self.reported - self.expected
+        if diff == 0:
+            return "matches"
+        return f"{diff} QP more than logged" if diff > 0 else f"{-diff} QP less than logged"
+
+    def line(self) -> str:
+        if self.start is None:
+            return f"QP check: no starting QP yet. Logged quests are worth {self.logged} QP."
+        txt = f"QP check: started at {self.start}, logged quests add {self.logged}, so expected {self.expected}."
+        if self.reported is not None:
+            txt += f" Reported {self.reported} <t:{self.reported_at}:R>: {self.status}."
+        return txt
+
+
 # ------------------------------------------------------------ storage
 
 class QCStore:
@@ -204,20 +243,47 @@ class QCStore:
         PANEL_ADMINS.update(ids)
 
     # players
-    async def upsert_player(self, rsn: str, user_id: int | None = None) -> None:
+    async def upsert_player(self, rsn: str, user_id: int | None = None, start_qp: int | None = None) -> None:
         await self.conn.execute(
-            "INSERT INTO qc_players(rsn, user_id, grp, start_qp, added) VALUES (?,?,'all',NULL,?) "
-            "ON CONFLICT(rsn) DO UPDATE SET user_id=COALESCE(excluded.user_id, qc_players.user_id)",
-            (rsn, user_id, int(time.time())))
+            "INSERT INTO qc_players(rsn, user_id, grp, start_qp, added) VALUES (?,?,'all',?,?) "
+            "ON CONFLICT(rsn) DO UPDATE SET user_id=COALESCE(excluded.user_id, qc_players.user_id), "
+            "start_qp=COALESCE(excluded.start_qp, qc_players.start_qp)",
+            (rsn, user_id, start_qp, int(time.time())))
         await self.conn.commit()
 
     async def link(self, rsn: str, user_id: int | None) -> None:
         await self.conn.execute("UPDATE qc_players SET user_id=? WHERE rsn=?", (user_id, rsn))
         await self.conn.commit()
 
+    async def set_start(self, rsn: str, qp: int | None) -> None:
+        await self.conn.execute("UPDATE qc_players SET start_qp=? WHERE rsn=?", (qp, rsn))
+        await self.conn.commit()
+
+    async def add_qp_report(self, rsn: str, qp: int, by_user: int | None, note: str | None = None) -> None:
+        await self.conn.execute("INSERT INTO qc_entries(rsn, qp, ts, by_user, proof) VALUES (?,?,?,?,?)",
+                                (rsn, qp, int(time.time()), by_user, note))
+        await self.conn.commit()
+
+    async def qp_check(self, rsn: str) -> "QPCheck":
+        """Starting QP + QP of every logged quest should equal the QP they report now."""
+        start, end = await self.window()
+        async with self.conn.execute("SELECT start_qp FROM qc_players WHERE rsn=?", (rsn,)) as cur:
+            row = await cur.fetchone()
+        start_qp = row[0] if row else None
+        async with self.conn.execute("SELECT qp, ts FROM qc_entries WHERE rsn=? ORDER BY ts, id", (rsn,)) as cur:
+            reports = await cur.fetchall()
+        if start_qp is None:  # fall back to the last QP reported before the start (the old QP list)
+            before = [q for q, ts in reports if ts <= start]
+            start_qp = before[-1] if before else None
+        after = [(q, ts) for q, ts in reports if ts > start]
+        logged = sum(QUEST_INFO[q.lower()][3] for q, _p, ts, _b, _pr in await self.done_of(rsn)
+                     if q.lower() in QUEST_INFO and start < ts <= end)
+        return QPCheck(start_qp, logged, after[-1][0] if after else None, after[-1][1] if after else None)
+
     async def remove_player(self, rsn: str) -> bool:
         cur = await self.conn.execute("DELETE FROM qc_players WHERE rsn=?", (rsn,))
         await self.conn.execute("DELETE FROM qc_done WHERE rsn=?", (rsn,))
+        await self.conn.execute("DELETE FROM qc_entries WHERE rsn=?", (rsn,))
         await self.conn.commit()
         return cur.rowcount > 0
 
@@ -257,7 +323,11 @@ class QCStore:
 
     async def reset(self, everything: bool) -> None:
         await self.conn.execute("DELETE FROM qc_done")
+        if not everything:  # keep the starting QP (reports from before the start), drop the rest
+            start, _ = await self.window()
+            await self.conn.execute("DELETE FROM qc_entries WHERE ts > ?", (start,))
         if everything:
+            await self.conn.execute("DELETE FROM qc_entries")
             await self.conn.execute("DELETE FROM qc_players")
             await self.conn.execute(
                 "DELETE FROM kv WHERE key LIKE 'qc:%' AND key NOT LIKE 'qc:msg:%' AND key != 'qc:admins'")
@@ -367,7 +437,7 @@ async def progress_text(qc: QCStore, p: dict) -> str:
     place = next((i + 1 for i, r in enumerate(rows) if r.rsn.lower() == p["rsn"].lower()), None)
     r = rows[place - 1] if place else Row(p["rsn"], p["user_id"])
     done = await qc.done_of(p["rsn"])
-    lines = [f"**{p['rsn']}**: {points_text(r.points)}, place {place} of {len(rows)}."]
+    lines = [f"**{p['rsn']}**: {points_text(r.points)}, place {place} of {len(rows)}.", (await qc.qp_check(p["rsn"])).line()]
     for quest, pts, ts, _by, proof in done[:20]:
         info = QUEST_INFO.get(quest.lower())
         link = f" [screenshot]({proof})" if proof and proof.startswith("http") else ""
@@ -407,7 +477,7 @@ async def log_quest(bot, interaction: discord.Interaction, p: dict, quest: str, 
     if not info:
         options = search_quests(quest, limit=5)
         return ("I can't find that quest." + (f" Did you mean: {', '.join(options)}?" if options else "")), False
-    name, diff, pts = info
+    name, diff, pts, _qp = info
     start, end = await qc.window()
     now = int(time.time())
     ts = now
@@ -518,6 +588,10 @@ class MyQuestsView(discord.ui.View):
             self.sel = sel
             self.add_item(sel)
 
+    @discord.ui.button(label="Check my QP", style=discord.ButtonStyle.primary, row=1)
+    async def check(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await interaction.response.send_modal(QPCheckModal(self.p["rsn"]))
+
     async def remove(self, interaction: discord.Interaction) -> None:
         qc: QCStore = interaction.client.qc
         p = await qc.player(self.p["rsn"])
@@ -529,6 +603,49 @@ class MyQuestsView(discord.ui.View):
         done = await qc.done_of(p["rsn"])
         await interaction.response.edit_message(
             content=(f"Removed {self.sel.values[0]}.\n\n" + await progress_text(qc, p))[:2000], view=MyQuestsView(p, done))
+
+
+class QPCheckModal(discord.ui.Modal):
+    """Player (or admin) types the QP shown in game; the bot compares it with the logged quests."""
+    value = discord.ui.TextInput(label="Your Quest Points in game right now", placeholder="e.g. 187", max_length=4)
+
+    def __init__(self, rsn: str, which: str = "check") -> None:
+        title = {"check": f"Check QP for {rsn}", "start": f"Starting QP for {rsn}", "current": f"Current QP for {rsn}"}[which]
+        super().__init__(title=title[:45])
+        self.rsn, self.which = rsn, which
+        if which == "start":
+            self.value.label = "Quest Points before the competition"
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw = str(self.value.value).strip()
+        if not raw.isdigit() or int(raw) > 1000:
+            await interaction.response.send_message("Type the number only, e.g. 187.", ephemeral=True)
+            return
+        qc: QCStore = interaction.client.qc
+        p = await qc.player(self.rsn)
+        if not p or (self.which == "check" and p["user_id"] != interaction.user.id and not is_admin(interaction)) \
+                or (self.which != "check" and not is_admin(interaction)):
+            await interaction.response.send_message("You can't change this player.", ephemeral=True)
+            return
+        if self.which == "start":
+            await qc.set_start(p["rsn"], int(raw))
+        else:
+            start, _ = await qc.window()
+            if int(time.time()) <= start:
+                await qc.set_start(p["rsn"], int(raw))  # before the start this is their starting QP
+            else:
+                await qc.add_qp_report(p["rsn"], int(raw), interaction.user.id, "admin" if self.which == "current" else None)
+        chk = await qc.qp_check(p["rsn"])
+        hint = ""
+        if chk.reported is not None and chk.expected is not None and chk.reported != chk.expected:
+            hint = ("\nYour game shows more QP than your logged quests: did you forget to log one?"
+                    if chk.reported > chk.expected else
+                    "\nYour logged quests add up to more QP than your game shows: check for a quest logged by mistake.")
+        if self.which == "check":
+            await interaction.response.send_message(chk.line() + hint, ephemeral=True)
+        else:
+            await interaction.response.edit_message(content=await player_card(qc, p["rsn"]),
+                                                    view=PlayerView(p["rsn"], await qc.done_of(p["rsn"])))
 
 
 async def show_progress(interaction: discord.Interaction) -> None:
@@ -563,7 +680,7 @@ class QPView(discord.ui.View):
 
     @discord.ui.button(label="Points per quest", style=discord.ButtonStyle.secondary, custom_id="qc:rules")
     async def rules(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        counts = {t: sum(1 for _, d in QUESTS if d == t) for t in TIERS}
+        counts = {t: sum(1 for q in QUESTS if q[1] == t) for t in TIERS}
         text = RULES + "\n\n" + "\n".join(f"{t}: {points_text(POINTS[t])} each ({counts[t]} quests)" for t in TIERS)
         text += "\n\nNot sure about a quest? Search for it with Log a quest: every result shows its difficulty and points."
         await interaction.response.send_message(text, ephemeral=True)
@@ -704,6 +821,24 @@ class SettingsView(discord.ui.View):
             await interaction.response.send_message("Post the final results in the channel now?",
                                                     view=ConfirmView("final"), ephemeral=True)
 
+    @discord.ui.button(label="QP check", style=discord.ButtonStyle.primary, row=3)
+    async def qpcheck(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if not await admin_only(interaction):
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        qc: QCStore = interaction.client.qc
+        lines = []
+        for p in await qc.players():
+            c = await qc.qp_check(p["rsn"])
+            mark = {"matches": "OK", "not checked yet": "-", "no starting QP": "?"}.get(c.status, "CHECK")
+            exp = c.expected if c.expected is not None else "?"
+            rep_ = c.reported if c.reported is not None else "-"
+            lines.append(f"`{mark:5}` {p['rsn']}: start {c.start if c.start is not None else '?'} + {c.logged} = {exp}, "
+                         f"reported {rep_}" + ("" if mark in ("OK", "-", "?") else f" ({c.status})"))
+        text = ("**QP check**: starting QP + QP of logged quests vs the QP they report in game.\n"
+                "OK matches, CHECK doesn't match, - not checked yet, ? no starting QP.\n\n" + "\n".join(lines or ["No players yet."]))
+        await interaction.followup.send(text[:2000], ephemeral=True)
+
     @discord.ui.button(label="Admin guide", style=discord.ButtonStyle.primary, row=3)
     async def guide(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
         if await admin_only(interaction):
@@ -729,12 +864,16 @@ async def qp_settings_cmd(interaction: discord.Interaction) -> None:
 
 class AddModal(discord.ui.Modal, title="Add a player"):
     rsn = discord.ui.TextInput(label="RuneScape name", max_length=12)
+    qp = discord.ui.TextInput(label="Quest Points before the start (optional)", required=False, max_length=4)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         qc: QCStore = interaction.client.qc
-        rsn = str(self.rsn.value).strip()
+        rsn, raw = str(self.rsn.value).strip(), str(self.qp.value).strip()
+        if raw and not raw.isdigit():
+            await interaction.response.send_message("Quest Points must be a number.", ephemeral=True)
+            return
         existing = await qc.player(rsn)
-        await qc.upsert_player(rsn)
+        await qc.upsert_player(rsn, start_qp=int(raw) if raw else None)
         interaction.client.qc_refresh_soon()
         p = await qc.player(rsn)
         await interaction.response.send_message(
@@ -743,22 +882,24 @@ class AddModal(discord.ui.Modal, title="Add a player"):
 
 
 class ImportModal(discord.ui.Modal, title="Import players"):
-    text = discord.ui.TextInput(label="One RuneScape name per line", style=discord.TextStyle.paragraph,
-                                placeholder="Wez\nKodageist\nBeanTown Dad", max_length=4000)
+    text = discord.ui.TextInput(label="One per line: name, starting QP", style=discord.TextStyle.paragraph,
+                                placeholder="Wez, 313\nKodageist, 114\nBeanTown Dad", max_length=4000)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         qc: QCStore = interaction.client.qc
         done = []
         for line in str(self.text.value).splitlines():
-            name = re.split(r"[,;\t|]", line)[0].strip()  # anything after a comma (old QP numbers) is ignored
+            parts = [x.strip() for x in re.split(r"[,;\t|]", line)]
+            name = parts[0]
+            qp = re.match(r"(\d+)", parts[1]) if len(parts) > 1 else None  # "161" or "161/346"
             if name and len(name) <= 12:
-                await qc.upsert_player(name)
-                done.append(name)
+                await qc.upsert_player(name, start_qp=int(qp.group(1)) if qp else None)
+                done.append(name + (f" ({qp.group(1)})" if qp else ""))
         interaction.client.qc_refresh_soon()
         msg = f"Imported {len(done)} player(s): {', '.join(done)}." if done else "Nothing imported."
         if done:
-            msg += "\nUse Edit player to link their Discord accounts."
+            msg += "\nThe number becomes their starting QP. Use Edit player to link their Discord accounts."
         await interaction.followup.send(msg[:2000], ephemeral=True)
 
 
@@ -841,6 +982,16 @@ class PlayerView(discord.ui.View):
         await interaction.client.qc.remove_done(self.rsn, self.rm_select.values[0])
         interaction.client.qc_refresh_soon()
         await self._refresh(interaction, f"Removed {self.rm_select.values[0]}.\n")
+
+    @discord.ui.button(label="Set starting QP", style=discord.ButtonStyle.secondary, row=3)
+    async def set_start(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.send_modal(QPCheckModal(self.rsn, "start"))
+
+    @discord.ui.button(label="Set current QP", style=discord.ButtonStyle.secondary, row=3)
+    async def set_current(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.send_modal(QPCheckModal(self.rsn, "current"))
 
     @discord.ui.button(label="Log a quest for them", style=discord.ButtonStyle.primary, row=2)
     async def add_quest(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
@@ -1001,9 +1152,11 @@ async def guide_embed(qc: QCStore) -> discord.Embed:
         "Press **Edit player** and pick the name. You can link Discord, log a quest for them, "
         "remove a quest that was logged by mistake, or remove the player. "
         "After the end, only admins can still add a missed quest.\n\n"
-        "**Checking**\n"
-        "Every logged quest shows when it was logged. Players can add a screenshot with /quest. "
-        "If something looks wrong, ask for a screenshot of their quest list.\n\n"
+        "**Checking with QP**\n"
+        "Every quest has its official Quest Points. Starting QP plus the QP of the logged quests should equal "
+        "what the player has in game. Players press **My progress** then **Check my QP** and type their QP. "
+        "Press **QP check** here to see everyone: CHECK means it doesn't add up, so ask for a screenshot. "
+        "Set a missing starting QP with **Edit player**, **Set starting QP**.\n\n"
         "**What the bot does by itself**\n"
         f"It keeps the leaderboard up to date, posts a reminder every day at {hour}:00 and pings players "
         "who didn't log anything in the last 20 hours. Two hours before the end it posts a last call, "
