@@ -17,7 +17,7 @@ import logging
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -158,6 +158,7 @@ class Row:
     points: int = 0
     quests: int = 0
     last_ts: int | None = None  # when they reached their current score (tie break: earlier wins)
+    done: list[str] = field(default_factory=list)  # counted quests, oldest first
 
 
 def build_rows(players: list[dict], done: list[tuple], start: int, end: int) -> list[Row]:
@@ -170,6 +171,7 @@ def build_rows(players: list[dict], done: list[tuple], start: int, end: int) -> 
         r.points += pts
         r.quests += 1
         r.last_ts = ts
+        r.done.append(QUEST_INFO[_quest.lower()][0] if _quest.lower() in QUEST_INFO else _quest)
     return sorted(rows.values(), key=lambda r: (-r.points, r.last_ts or 1 << 62, r.rsn.lower()))
 
 
@@ -408,16 +410,33 @@ def board_embeds(rows: list[Row], start: int, end: int, prizes: list[str], final
     if not rows:
         board.description = "No players yet."
     else:
-        lines = []
-        for i, r in enumerate(rows[:40]):
+        shown = rows[:40]
+        heads = []
+        for i, r in enumerate(shown):
             if r.quests:
-                lines.append(f"**{i + 1}.** {r.rsn}: **{points_text(r.points)}** "
+                heads.append(f"**{i + 1}.** {r.rsn}: **{points_text(r.points)}** "
                              f"({r.quests} quest{'s' if r.quests != 1 else ''}, <t:{r.last_ts}:R>)")
             else:
-                lines.append(f"**{i + 1}.** {r.rsn}: 0 points")
+                heads.append(f"**{i + 1}.** {r.rsn}: 0 points")
+        # Each player's finished quests under their line, newest first, cut to fit Discord's 4096 characters.
+        with_quests = sum(1 for r in shown if r.quests) or 1
+        budget = max(40, (3900 - sum(len(h) + 1 for h in heads)) // with_quests - 6)
+        lines = []
+        for h, r in zip(heads, shown):
+            lines.append(h)
+            if r.quests:
+                names, used = [], 0
+                for name in reversed(r.done):
+                    if used + len(name) + 2 > budget:
+                        break
+                    names.append(name)
+                    used += len(name) + 2
+                more = r.quests - len(names)
+                lines.append("└ " + ", ".join(names) + (f" and {more} more" if more else ""))
         if len(rows) > 40:
             lines.append(f"and {len(rows) - 40} more")
-        board.description = "\n".join(lines)
+        board.description = "\n".join(lines)[:4096]
+        board.set_footer(text="Press See someone's quests for a full list.")
     return [head, board]
 
 
@@ -696,6 +715,43 @@ class QPView(discord.ui.View):
     async def mine(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         if await play_only(interaction):
             await show_progress(interaction)
+
+    @discord.ui.button(label="See someone's quests", style=discord.ButtonStyle.secondary, custom_id="qc:who")
+    async def who(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if not await play_only(interaction):
+            return
+        rows, *_ = await interaction.client.qc.standings()
+        if not rows:
+            await interaction.response.send_message("No players yet.", ephemeral=True)
+            return
+        await interaction.response.send_message("Whose quests do you want to see?",
+                                                view=WhoView([{"rsn": r.rsn} for r in rows]), ephemeral=True)
+
+
+class WhoView(discord.ui.View):
+    def __init__(self, players: list[dict]) -> None:
+        super().__init__(timeout=900)
+        sel = discord.ui.Select(placeholder="Pick a player", options=[
+            discord.SelectOption(label=p["rsn"], value=p["rsn"]) for p in players[:25]])
+        sel.callback = self.pick
+        self.sel = sel
+        self.add_item(sel)
+
+    async def pick(self, interaction: discord.Interaction) -> None:
+        qc: QCStore = interaction.client.qc
+        rows, start, end = await qc.standings()
+        rsn = self.sel.values[0]
+        place = next((i for i, r in enumerate(rows) if r.rsn.lower() == rsn.lower()), None)
+        if place is None:
+            await interaction.response.edit_message(content=f"{rsn} is no longer in the competition.", view=None)
+            return
+        r = rows[place]
+        lines = [f"**{r.rsn}**: {points_text(r.points)}, place {place + 1} of {len(rows)}."]
+        for name in reversed(r.done):
+            lines.append(f"{name}: {quest_label(name)}" if name.lower() in QUEST_INFO else name)
+        if not r.done:
+            lines.append("No quests logged yet.")
+        await interaction.response.edit_message(content="\n".join(lines)[:2000], view=self)
 
 
 class LegacyRulesView(discord.ui.View):
