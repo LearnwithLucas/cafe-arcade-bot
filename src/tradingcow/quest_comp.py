@@ -5,7 +5,7 @@ The bot keeps one live leaderboard message per competition channel and edits it 
 
 Groups:
   Low and Medium: most QP gained between the start and the end.
-  High: first players to reach the Quest Cape (max QP) during the competition.
+  High: most QP gained, but anyone who reaches the Quest Cape during the competition ranks above that (first cape first).
 
 Test mode (QC_TEST_MODE=1, the default) lets only the testers use anything.
 Turn it off on Render with QC_TEST_MODE=0 when the real competition goes live.
@@ -146,7 +146,7 @@ def rank(group: str, rows: list[Standing]) -> list[Standing]:
     if group == "high":
         capped = sorted((r for r in rows if r.cape_at), key=lambda r: r.cape_at)
         rest = sorted((r for r in rows if not r.cape_at),
-                      key=lambda r: (-(r.current or 0), r.reached_at or 1 << 62, r.rsn.lower()))
+                      key=lambda r: (-r.gain, r.reached_at or 1 << 62, r.rsn.lower()))
         return capped + rest
     return sorted(rows, key=lambda r: (-r.gain, r.reached_at or 1 << 62, r.rsn.lower()))
 
@@ -317,7 +317,7 @@ def board_embeds(groups: dict[str, list[Standing]], start: int, end: int, mx: in
     head = discord.Embed(
         title="Quest Competition" + (" (test)" if TEST_MODE else ""), color=COLOR,
         description=(f"{state}\n\nLow and Medium: most Quest Points gained wins. "
-                     f"High: the first two to reach the Quest Cape ({mx} QP) win.\n"
+                     f"High: most QP gained, and reaching the Quest Cape ({mx} QP) puts you on top.\n"
                      f"Press **Update my QP** below or type /qp. "
                      f"Not on the list? Ask {ORGANISER}."))
     head.set_footer(text=f"Updated {datetime.fromtimestamp(now, TZ).strftime('%d %b %H:%M')} Amsterdam time")
@@ -339,11 +339,11 @@ def board_embeds(groups: dict[str, list[Standing]], start: int, end: int, mx: in
             when = f" (<t:{r.updated}:R>)" if r.updated else ""
             if g == "high":
                 if r.cape_at:
-                    lines.append(f"{pos} {r.rsn}: **Quest Cape** <t:{r.cape_at}:f>")
+                    lines.append(f"{pos} {r.rsn}: **Quest Cape** <t:{r.cape_at}:f> (+{r.gain})")
                 else:
                     left = max(0, mx - r.current)
-                    extra = ", already had it" if "already had the cape" in r.notes else ""
-                    lines.append(f"{pos} {r.rsn}: {r.current} QP, {left} to go{extra}{when}")
+                    extra = "already had the cape" if "already had the cape" in r.notes else f"{left} to the cape"
+                    lines.append(f"{pos} {r.rsn}: **+{r.gain}** ({r.start} to {r.current}, {extra}){when}")
             else:
                 lines.append(f"{pos} {r.rsn}: **+{r.gain}** ({r.start} to {r.current}){when}")
         if len(rows) > 25:
@@ -357,14 +357,11 @@ def winners_text(groups: dict[str, list[Standing]]) -> str:
     lines = []
     for g in GROUPS:
         rows = groups.get(g, [])
-        if g == "high":
-            top = [r for r in rows if r.cape_at][:2]
-        else:
-            top = [r for r in rows if r.gain > 0][:2]
+        top = [r for r in rows if r.gain > 0 or r.cape_at][:2]
         names = []
         for i, r in enumerate(top):
             who = f"<@{r.user_id}>" if r.user_id else r.rsn
-            what = "Quest Cape" if g == "high" else f"+{r.gain} QP"
+            what = "Quest Cape" if r.cape_at else f"+{r.gain} QP"
             names.append(f"{medal(i)} {who} ({r.rsn}, {what}, {PRIZES[g][i]})")
         lines.append(f"**{GROUP_NAMES[g]}**: " + ("; ".join(names) if names else "no winner"))
     return "\n".join(lines)
@@ -440,8 +437,9 @@ async def player_status(qc: QCStore, user_id: int) -> str:
         if not r or r.current is None:
             lines.append(f"**{p['rsn']}** ({GROUP_NAMES[p['grp']].lower()}): no QP reported yet.")
             continue
-        score = ("Quest Cape reached" if r.cape_at else f"{max(0, mx - r.current)} QP to the cape") if p["grp"] == "high" \
-            else f"+{r.gain} since the start"
+        score = f"+{r.gain} since the start"
+        if p["grp"] == "high":
+            score += ", Quest Cape reached" if r.cape_at else f", {max(0, mx - r.current)} QP to the cape"
         lines.append(f"**{p['rsn']}** ({GROUP_NAMES[p['grp']].lower()}): {r.current} QP, {score}, place {place} of {len(rows)}.")
     now = int(time.time())
     when = f"Starts <t:{start}:R>." if now < start else (f"Ends <t:{end}:R>." if now < end else "The competition has ended.")
@@ -1104,7 +1102,7 @@ async def guide_embed(qc: QCStore) -> discord.Embed:
         "set their current or starting QP, or remove them. Use this for typos: players can't lower their own QP.\n\n"
         "**How the score works**\n"
         "Starting QP is the last number reported before the start. "
-        "Low and medium: most QP gained wins. High: the first two to reach the Quest Cape win. "
+        "Every group: most QP gained wins. In the high group, reaching the Quest Cape beats any gain (first cape first). "
         "Nothing changes after the end.\n\n"
         "**What the bot does by itself**\n"
         f"It keeps the leaderboard up to date, posts a reminder every day at {hour}:00 and pings players "
