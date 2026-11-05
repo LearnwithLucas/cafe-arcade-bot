@@ -1222,31 +1222,30 @@ class ConfirmView(discord.ui.View):
 
 async def guide_embed(qc: QCStore) -> discord.Embed:
     hour = await qc.setting("ask_hour", DEFAULT_ASK_HOUR)
+    start, end = await qc.window()
     e = discord.Embed(title="Quest competition: admin guide", color=COLOR, description=(
-        "Everything happens in **/qp_settings**. Only admins see these buttons and replies.\n\n"
-        "**How it works**\n"
-        f"{RULES} Only quests logged between the start and the end count.\n\n"
-        "**Add a player**\n"
-        "Press **Add player**, type their RuneScape name, then pick their Discord account in the dropdown. "
-        "Without a linked account they can't log quests themselves.\n\n"
-        "**Fix a player**\n"
-        "Press **Edit player** and pick the name. You can link Discord, log a quest for them, "
-        "remove a quest that was logged by mistake, or remove the player. "
+        f"Runs from <t:{start}:f> to <t:{end}:f>. {RULES} "
+        "Only quests logged between the start and the end count. Everything below is in **/qp_settings**.\n\n"
+        "**Before the start**\n"
+        "1. **Add player** for anyone new: RuneScape name and their QP now. "
+        "Or paste a list in **Import list**, one per line, like `Wez, 313`.\n"
+        "2. **Edit player**, pick the name, then pick their Discord account in the top dropdown. "
+        "Without a link they can't log quests. The player list shows who is still \"not linked yet\".\n"
+        "3. Make sure everyone has their real starting QP: **Edit player**, **Set starting QP**. "
+        "Players on 1 QP will fail the QP check later.\n\n"
+        "**During the competition**\n"
+        "Players press **I finished a quest**, type part of the name and pick it. They can undo their own mistakes.\n"
+        "Someone stuck? **Edit player**, then **Log a quest for them**. Logged wrong? Remove it with the dropdown there.\n"
+        "Press **QP check** now and then. Starting QP plus the QP of their logged quests should match their QP in game. "
+        "CHECK means it doesn't add up: ask for a screenshot of their quest list. "
+        "Players report their QP with **My progress**, **Check my QP**, or you set it with **Set current QP**.\n\n"
+        "**The bot does this by itself**\n"
+        f"Keeps the leaderboard up to date, posts a reminder every day at {hour}:00 and pings players who logged nothing "
+        "in 20 hours, posts a last call 2 hours before the end, and posts the winners at the end. "
         "After the end, only admins can still add a missed quest.\n\n"
-        "**Checking with QP**\n"
-        "Every quest has its official Quest Points. Starting QP plus the QP of the logged quests should equal "
-        "what the player has in game. Players press **My progress** then **Check my QP** and type their QP. "
-        "Press **QP check** here to see everyone: CHECK means it doesn't add up, so ask for a screenshot. "
-        "Set a missing starting QP with **Edit player**, **Set starting QP**.\n\n"
-        "**What the bot does by itself**\n"
-        f"It keeps the leaderboard up to date, posts a reminder every day at {hour}:00 and pings players "
-        "who didn't log anything in the last 20 hours. Two hours before the end it posts a last call, "
-        "and at the end it posts the winners.\n\n"
-        "**Other buttons**\n"
-        "**Repost board** moves the leaderboard to the bottom of the channel. "
-        "**Post reminder now** posts the buttons straight away. "
-        "**Dates and prizes** and **Channel** change the setup. **Admins** adds or removes admins. "
-        "Leave **Post results** and **Reset test data** to Lucas."))
+        "**Handy**\n"
+        "**Repost board** if the leaderboard got buried in the chat. **Post reminder now** to nudge everyone.\n"
+        "Leave **Dates and prizes**, **Post results** and **Reset test data** to Lucas."))
     e.set_footer(text="Players only need the I finished a quest button.")
     return e
 
