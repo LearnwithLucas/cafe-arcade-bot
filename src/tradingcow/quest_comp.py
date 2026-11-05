@@ -1,6 +1,6 @@
 """Quest competition for TradingCow: one leaderboard, points per finished quest.
 
-Players log every quest they finish during the competition with the "Log a quest" button or /quest.
+Players log every quest they finish during the competition with the "I finished a quest" button or /quest.
 Each quest is worth points by its official difficulty (see quest_list.py):
 Novice 1, Intermediate 2, Experienced 4, Master 7, Grandmaster 12. Most points wins.
 
@@ -402,7 +402,7 @@ def board_embeds(rows: list[Row], start: int, end: int, prizes: list[str], final
     head = discord.Embed(
         title="Quest Competition" + (" (test)" if TEST_MODE else ""), color=COLOR,
         description=(f"{state}\n\n{RULES}\n\n**Prizes**: {prize_line}\n"
-                     f"Press **Log a quest** below or type /quest. Not on the list? Ask {ORGANISER}."))
+                     f"Press **I finished a quest** below, type part of the name and pick it. Not on the list? Ask {ORGANISER}."))
     head.set_footer(text=f"Updated {datetime.fromtimestamp(now, TZ).strftime('%d %b %H:%M')} Amsterdam time")
     board = discord.Embed(title="Leaderboard", color=COLOR)
     if not rows:
@@ -502,6 +502,10 @@ class UndoView(discord.ui.View):
         super().__init__(timeout=900)
         self.rsn, self.quest = rsn, quest
 
+    @discord.ui.button(label="I finished another one", style=discord.ButtonStyle.success)
+    async def another(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await interaction.response.send_modal(QuestSearchModal(self.rsn))
+
     @discord.ui.button(label="Undo", style=discord.ButtonStyle.secondary)
     async def undo(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
         qc: QCStore = interaction.client.qc
@@ -541,8 +545,8 @@ class QuestPickView(discord.ui.View):
         await send_log_result(interaction, self.p, self.sel.values[0], None, edit=True)
 
 
-class QuestSearchModal(discord.ui.Modal, title="Log a quest"):
-    term = discord.ui.TextInput(label="Quest name (part of it is enough)", placeholder="e.g. dragon slayer, ds2, waterfall",
+class QuestSearchModal(discord.ui.Modal, title="Which quest did you finish?"):
+    term = discord.ui.TextInput(label="Type the name (part of it is fine)", placeholder="e.g. waterfall, dragon slayer, ds2",
                                 max_length=60)
 
     def __init__(self, rsn: str | None = None) -> None:
@@ -588,7 +592,11 @@ class MyQuestsView(discord.ui.View):
             self.sel = sel
             self.add_item(sel)
 
-    @discord.ui.button(label="Check my QP", style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="I finished a quest", style=discord.ButtonStyle.success, row=1)
+    async def log_here(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await interaction.response.send_modal(QuestSearchModal(self.p["rsn"]))
+
+    @discord.ui.button(label="Check my QP", style=discord.ButtonStyle.secondary, row=1)
     async def check(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
         await interaction.response.send_modal(QPCheckModal(self.p["rsn"]))
 
@@ -662,27 +670,45 @@ async def show_progress(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(text[:2000], view=MyQuestsView(p, await qc.done_of(p["rsn"])), ephemeral=True)
 
 
+async def open_log(interaction: discord.Interaction) -> None:
+    """'I finished a quest': straight to the search box. Only asks which account when someone has several."""
+    if not await play_only(interaction):
+        return
+    mine = await interaction.client.qc.players_of(interaction.user.id)
+    if not mine:
+        await interaction.response.send_message(
+            f"You aren't on the participant list yet. Ask {ORGANISER} to add you and link your Discord account.", ephemeral=True)
+        return
+    await interaction.response.send_modal(QuestSearchModal(mine[0]["rsn"] if len(mine) == 1 else None))
+
+
 class QPView(discord.ui.View):
     """Persistent buttons under the board and the daily reminder (they keep working after restarts)."""
 
     def __init__(self) -> None:
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Log a quest", style=discord.ButtonStyle.primary, custom_id="qc:log")
+    @discord.ui.button(label="I finished a quest", style=discord.ButtonStyle.success, custom_id="qc:log")
     async def log_btn(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        if await play_only(interaction):
-            await interaction.response.send_modal(QuestSearchModal())
+        await open_log(interaction)
 
     @discord.ui.button(label="My progress", style=discord.ButtonStyle.secondary, custom_id="qc:mine")
     async def mine(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         if await play_only(interaction):
             await show_progress(interaction)
 
+
+class LegacyRulesView(discord.ui.View):
+    """The old 'Points per quest' button on reminders posted before it was removed."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
     @discord.ui.button(label="Points per quest", style=discord.ButtonStyle.secondary, custom_id="qc:rules")
     async def rules(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         counts = {t: sum(1 for q in QUESTS if q[1] == t) for t in TIERS}
         text = RULES + "\n\n" + "\n".join(f"{t}: {points_text(POINTS[t])} each ({counts[t]} quests)" for t in TIERS)
-        text += "\n\nNot sure about a quest? Search for it with Log a quest: every result shows its difficulty and points."
+        text += "\n\nNot sure about a quest? Search for it with I finished a quest: every result shows its difficulty and points."
         await interaction.response.send_message(text, ephemeral=True)
 
 
@@ -694,8 +720,7 @@ class LegacyView(discord.ui.View):
 
     @discord.ui.button(label="Update my QP", style=discord.ButtonStyle.primary, custom_id="qc:update")
     async def old(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
-        if await play_only(interaction):
-            await interaction.response.send_modal(QuestSearchModal())
+        await open_log(interaction)
 
 
 # ------------------------------------------------------------ player command
@@ -1166,7 +1191,7 @@ async def guide_embed(qc: QCStore) -> discord.Embed:
         "**Post reminder now** posts the buttons straight away. "
         "**Dates and prizes** and **Channel** change the setup. **Admins** adds or removes admins. "
         "Leave **Post results** and **Reset test data** to Lucas."))
-    e.set_footer(text="Players only need the Log a quest button, or /quest.")
+    e.set_footer(text="Players only need the I finished a quest button.")
     return e
 
 
@@ -1180,6 +1205,7 @@ class QuestCompMixin:
         await self.qc.setup()
         self.add_view(QPView())
         self.add_view(LegacyView())
+        self.add_view(LegacyRulesView())
         self.tree.add_command(quest_cmd)
         self.tree.add_command(qp_settings_cmd)
         self.qc_loop.start()
