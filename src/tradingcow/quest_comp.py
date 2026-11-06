@@ -54,7 +54,7 @@ DEFAULT_START = os.getenv("QC_START", "2026-11-07 22:00")
 DEFAULT_END = os.getenv("QC_END", "2026-11-14 22:00")
 DEFAULT_ASK_HOUR = int(os.getenv("QC_ASK_HOUR", "20"))  # Amsterdam time
 DEFAULT_PRIZES = os.getenv("QC_PRIZES", "17.5M, 12.5M, 8.5M, 5.5M, 3.5M")
-DEFAULT_BANNER = os.getenv("QC_BANNER", "https://learnwithlucas.com/wp-content/uploads/2026/11/Golden-Quest-Road-to-the-Castle.jpg")
+DEFAULT_BANNER = os.getenv("QC_BANNER", "https://learnwithlucas.com/wp-content/uploads/2026/11/Golden-Knight-Quest-Competition.jpg")
 LAST_CALL_HOURS = 2
 
 SCHEMA = """
