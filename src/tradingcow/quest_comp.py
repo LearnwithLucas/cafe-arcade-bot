@@ -392,7 +392,19 @@ RULES = ("Log every quest you finish during the competition. Points by difficult
          "Each Recipe for Disaster subquest counts as Experienced. Most points wins.")
 
 
-def board_embeds(rows: list[Row], start: int, end: int, prizes: list[str], final: bool = False) -> list[discord.Embed]:
+MEDALS = {0: "\U0001F947", 1: "\U0001F948", 2: "\U0001F949"}  # gold, silver, bronze
+
+
+def rank_mark(i: int, prizes: list[str]) -> str:
+    if i in MEDALS:
+        return MEDALS[i]
+    if i < len(prizes):
+        return "\U0001F3C5"  # sports medal for the other prize places
+    return f"`{i + 1:>2}.`"
+
+
+def board_embeds(rows: list[Row], start: int, end: int, prizes: list[str], final: bool = False,
+                 banner: str = "") -> list[discord.Embed]:
     now = int(time.time())
     if final or now > end:
         state = f"Finished <t:{end}:f>. Final results."
@@ -406,6 +418,8 @@ def board_embeds(rows: list[Row], start: int, end: int, prizes: list[str], final
         description=(f"{state}\n\n{RULES}\n\n**Prizes**: {prize_line}\n"
                      f"Press **I finished a quest** below, type part of the name and pick it. Not on the list? Ask {ORGANISER}."))
     head.set_footer(text=f"Updated {datetime.fromtimestamp(now, TZ).strftime('%d %b %H:%M')} Amsterdam time")
+    if banner:
+        head.set_image(url=banner)
     board = discord.Embed(title="Leaderboard", color=COLOR)
     if not rows:
         board.description = "No players yet."
@@ -413,16 +427,19 @@ def board_embeds(rows: list[Row], start: int, end: int, prizes: list[str], final
         shown = rows[:40]
         heads = []
         for i, r in enumerate(shown):
+            mark = rank_mark(i, prizes)
+            prize = f"  \u00b7  {prizes[i]}" if i < len(prizes) and r.points else ""
             if r.quests:
-                heads.append(f"**{i + 1}.** {r.rsn}: **{points_text(r.points)}** "
-                             f"({r.quests} quest{'s' if r.quests != 1 else ''}, <t:{r.last_ts}:R>)")
+                heads.append(f"{mark} **{r.rsn}**: **{points_text(r.points)}**{prize}")
             else:
-                heads.append(f"**{i + 1}.** {r.rsn}: 0 points")
+                heads.append(f"{mark} {r.rsn}: 0 points")
         # Each player's finished quests under their line, newest first, cut to fit Discord's 4096 characters.
         with_quests = sum(1 for r in shown if r.quests) or 1
         budget = max(40, (3900 - sum(len(h) + 1 for h in heads)) // with_quests - 6)
         lines = []
-        for h, r in zip(heads, shown):
+        for i, (h, r) in enumerate(zip(heads, shown)):
+            if i == len(prizes) and i > 0:
+                lines.append("")  # gap between the prize places and the rest
             lines.append(h)
             if r.quests:
                 names, used = [], 0
@@ -432,7 +449,8 @@ def board_embeds(rows: list[Row], start: int, end: int, prizes: list[str], final
                     names.append(name)
                     used += len(name) + 2
                 more = r.quests - len(names)
-                lines.append("└ " + ", ".join(names) + (f" and {more} more" if more else ""))
+                lines.append(f"\u2003\u2514 {r.quests} quest{'s' if r.quests != 1 else ''}: " + ", ".join(names)
+                             + (f" and {more} more" if more else ""))
         if len(rows) > 40:
             lines.append(f"and {len(rows) - 40} more")
         board.description = "\n".join(lines)[:4096]
@@ -868,7 +886,7 @@ class SettingsView(discord.ui.View):
         s, e = await qc.window()
         await interaction.response.send_modal(DatesModal(
             datetime.fromtimestamp(s, TZ).strftime("%Y-%m-%d %H:%M"), datetime.fromtimestamp(e, TZ).strftime("%Y-%m-%d %H:%M"),
-            ", ".join(await qc.prizes()), await qc.setting("ask_hour", DEFAULT_ASK_HOUR)))
+            ", ".join(await qc.prizes()), await qc.setting("ask_hour", DEFAULT_ASK_HOUR), await qc.setting("banner", "")))
 
     @discord.ui.button(label="Channel", style=discord.ButtonStyle.secondary, row=1)
     async def channel(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
@@ -1089,13 +1107,15 @@ class PlayerView(discord.ui.View):
 # ---- settings pieces
 
 class DatesModal(discord.ui.Modal, title="Dates and prizes"):
-    def __init__(self, start: str, end: str, prizes: str, ask_hour) -> None:
+    def __init__(self, start: str, end: str, prizes: str, ask_hour, banner: str = "") -> None:
         super().__init__()
         self.start = discord.ui.TextInput(label="Start (Amsterdam time)", default=start, max_length=16)
         self.end = discord.ui.TextInput(label="End (Amsterdam time)", default=end, max_length=16)
         self.prizes = discord.ui.TextInput(label="Prizes for 1st, 2nd, 3rd (commas)", default=prizes, max_length=100)
         self.ask_hour = discord.ui.TextInput(label="Daily reminder hour (0 to 23)", default=str(ask_hour), max_length=2)
-        for x in (self.start, self.end, self.prizes, self.ask_hour):
+        self.banner = discord.ui.TextInput(label="Banner image link (optional)", default=banner or None, required=False,
+                                           max_length=400, placeholder="https://... (.png, .jpg or .gif)")
+        for x in (self.start, self.end, self.prizes, self.ask_hour, self.banner):
             self.add_item(x)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -1111,13 +1131,16 @@ class DatesModal(discord.ui.Modal, title="Dates and prizes"):
             problems.append("give at least one prize, e.g. 25M, 15M, 7.5M")
         if not hour.isdigit() or not 0 <= int(hour) <= 23:
             problems.append("the reminder hour must be 0 to 23")
+        banner = str(self.banner.value).strip()
+        if banner and not re.match(r"https?://\S+$", banner):
+            problems.append("the banner must be a link starting with https://")
         if problems:
             await interaction.response.send_message("Not saved: " + "; ".join(problems) + ".", ephemeral=True)
             return
         if (s, e) != await qc.window():
             for k in ("final_posted", "last_call"):
                 await qc.put(k, "")
-        for k, v in (("start", s), ("end", e), ("prizes", ", ".join(prizes)), ("ask_hour", int(hour))):
+        for k, v in (("start", s), ("end", e), ("prizes", ", ".join(prizes)), ("ask_hour", int(hour)), ("banner", banner)):
             await qc.put(k, v)
         interaction.client.qc_refresh_soon()
         await interaction.response.edit_message(content=await panel_text(qc, interaction.client), view=SettingsView())
@@ -1296,7 +1319,7 @@ class QuestCompMixin:
         if not ch:
             return
         rows, start, end = await self.qc.standings()
-        embeds = board_embeds(rows, start, end, await self.qc.prizes(), final)
+        embeds = board_embeds(rows, start, end, await self.qc.prizes(), final, await self.qc.setting("banner", ""))
         key = f"qc:msg:board:{ch.id}"
         msg_id = await self.store.get(key)
         msg = None
