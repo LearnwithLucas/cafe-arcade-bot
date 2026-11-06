@@ -406,6 +406,23 @@ def rank_mark(i: int, prizes: list[str]) -> str:
     return f"`{i + 1:>2}.`"
 
 
+def pre_start_embeds(rows: list[Row], prizes: list[str]) -> list[discord.Embed]:
+    """Before the start: the prize places waiting to be claimed, and everyone taking part (A to Z, no ranking yet)."""
+    places = discord.Embed(title="Prizes up for grabs", color=COLOR, description="\n".join(
+        f"{rank_mark(i, prizes)} **{place_name(i)} place**: {p}" for i, p in enumerate(prizes)))
+    names = sorted((r.rsn for r in rows), key=str.lower)
+    people = discord.Embed(title=f"Participants ({len(names)})", color=COLOR)
+    if names:
+        half = (len(names) + 1) // 2
+        people.add_field(name="\u200b", value="\n".join(names[:half])[:1024], inline=True)
+        if names[half:]:
+            people.add_field(name="\u200b", value="\n".join(names[half:])[:1024], inline=True)
+        people.set_footer(text="Everyone starts at 0 points. The leaderboard goes live at the start.")
+    else:
+        people.description = "No players yet."
+    return [places, people]
+
+
 def board_embeds(rows: list[Row], start: int, end: int, prizes: list[str], final: bool = False,
                  banner: str = "") -> list[discord.Embed]:
     now = int(time.time())
@@ -423,6 +440,8 @@ def board_embeds(rows: list[Row], start: int, end: int, prizes: list[str], final
     head.set_footer(text=f"Updated {datetime.fromtimestamp(now, TZ).strftime('%d %b %H:%M')} Amsterdam time")
     if banner:
         head.set_image(url=banner)
+    if now < start and not final:
+        return [head, *pre_start_embeds(rows, prizes)]
     board = discord.Embed(title="Leaderboard", color=COLOR)
     if not rows:
         board.description = "No players yet."
