@@ -222,6 +222,8 @@ class QCStore:
         await self.conn.commit()
         PANEL_ADMINS.clear()
         PANEL_ADMINS.update(_ids(await self.setting("admins", "")))
+        # A banner saved in the panel overrides DEFAULT_BANNER; drop it so a new default always shows after an update.
+        await self.put("banner", "")
 
     async def setting(self, key: str, default):
         raw = await self.s.get(f"qc:{key}")
