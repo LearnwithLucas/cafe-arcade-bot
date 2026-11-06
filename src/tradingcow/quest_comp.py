@@ -756,6 +756,10 @@ class QPView(discord.ui.View):
         if await play_only(interaction):
             await show_progress(interaction)
 
+    @discord.ui.button(label="How it works", style=discord.ButtonStyle.secondary, custom_id="qc:help")
+    async def help(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.send_message(embed=player_guide_embed(), ephemeral=True)
+
     @discord.ui.button(label="See someone's quests", style=discord.ButtonStyle.secondary, custom_id="qc:who")
     async def who(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
         if not await play_only(interaction):
@@ -766,6 +770,34 @@ class QPView(discord.ui.View):
             return
         await interaction.response.send_message("Whose quests do you want to see?",
                                                 view=WhoView([{"rsn": r.rsn} for r in rows]), ephemeral=True)
+
+
+def player_guide_embed() -> discord.Embed:
+    e = discord.Embed(title="How the quest competition works", color=COLOR, description=(
+        "**Log a quest**\n"
+        "1. Press **I finished a quest** under the leaderboard.\n"
+        "2. Type part of the name, like `waterfall`, `dragon` or `ds2`.\n"
+        "3. Pick your quest from the list. If only one quest matches, it's saved straight away.\n"
+        "Finished more? Press **I finished another one**.\n\n"
+        "**Fix a mistake**\n"
+        "Wrong quest? Press **Undo** right after logging it. "
+        "Noticed it later? Press **My progress** and remove it with the dropdown.\n\n"
+        "**Check your QP**\n"
+        "Press **My progress**, then **Check my QP**, and type the Quest Points you see in game. "
+        "If it says you have more QP than logged, you forgot to log a quest. "
+        "If it says less, you logged one by mistake.\n\n"
+        "**Two different numbers**\n"
+        "**Competition points** decide the leaderboard: Novice 1, Intermediate 2, Experienced 4, Master 7, Grandmaster 12. "
+        "**Quest Points** are what the game gives you, and we only use them to check that everything adds up. "
+        "Example: Dragon Slayer II gives 5 QP in game and 12 competition points here.\n\n"
+        "**Good to know**\n"
+        "Only quests finished between the start and the end count, and each quest counts once. "
+        "Each Recipe for Disaster subquest counts as its own quest. "
+        "**See someone's quests** shows anyone's full list. "
+        "You can also type `/quest` and pick the quest from the dropdown, with an optional screenshot.\n\n"
+        f"Button says you're not on the list? Ask {ORGANISER} to add you and link your Discord account."))
+    e.set_footer(text="Top 5: keep a screenshot of your quest list ready before prizes are paid.")
+    return e
 
 
 class WhoView(discord.ui.View):
