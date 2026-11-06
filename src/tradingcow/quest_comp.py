@@ -53,7 +53,8 @@ DEFAULT_CHANNEL = int(os.getenv("QC_CHANNEL_ID", "1552970635247095939"))
 DEFAULT_START = os.getenv("QC_START", "2026-11-07 22:00")
 DEFAULT_END = os.getenv("QC_END", "2026-11-14 22:00")
 DEFAULT_ASK_HOUR = int(os.getenv("QC_ASK_HOUR", "20"))  # Amsterdam time
-DEFAULT_PRIZES = os.getenv("QC_PRIZES", "25M, 15M, 7.5M")
+DEFAULT_PRIZES = os.getenv("QC_PRIZES", "17.5M, 12.5M, 8.5M, 5.5M, 3.5M")
+DEFAULT_BANNER = os.getenv("QC_BANNER", "https://learnwithlucas.com/wp-content/uploads/2026/11/Golden-Quest-Road-to-the-Castle.jpg")
 LAST_CALL_HOURS = 2
 
 SCHEMA = """
@@ -886,7 +887,7 @@ class SettingsView(discord.ui.View):
         s, e = await qc.window()
         await interaction.response.send_modal(DatesModal(
             datetime.fromtimestamp(s, TZ).strftime("%Y-%m-%d %H:%M"), datetime.fromtimestamp(e, TZ).strftime("%Y-%m-%d %H:%M"),
-            ", ".join(await qc.prizes()), await qc.setting("ask_hour", DEFAULT_ASK_HOUR), await qc.setting("banner", "")))
+            ", ".join(await qc.prizes()), await qc.setting("ask_hour", DEFAULT_ASK_HOUR), await qc.setting("banner", DEFAULT_BANNER)))
 
     @discord.ui.button(label="Channel", style=discord.ButtonStyle.secondary, row=1)
     async def channel(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
@@ -1319,7 +1320,7 @@ class QuestCompMixin:
         if not ch:
             return
         rows, start, end = await self.qc.standings()
-        embeds = board_embeds(rows, start, end, await self.qc.prizes(), final, await self.qc.setting("banner", ""))
+        embeds = board_embeds(rows, start, end, await self.qc.prizes(), final, await self.qc.setting("banner", DEFAULT_BANNER))
         key = f"qc:msg:board:{ch.id}"
         msg_id = await self.store.get(key)
         msg = None
