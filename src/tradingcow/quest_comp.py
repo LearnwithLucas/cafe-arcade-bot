@@ -922,6 +922,13 @@ class SettingsView(discord.ui.View):
         if await admin_only(interaction):
             await interaction.response.send_modal(ImportModal())
 
+    @discord.ui.button(label="Link players", style=discord.ButtonStyle.primary, row=0)
+    async def links(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if not await admin_only(interaction):
+            return
+        text, view = await link_overview(interaction.client.qc)
+        await interaction.response.send_message(text, view=view, ephemeral=True)
+
     @discord.ui.button(label="Edit player", style=discord.ButtonStyle.primary, row=0)
     async def edit(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
         if not await admin_only(interaction):
@@ -1089,6 +1096,71 @@ class PickView(discord.ui.View):
         rsn = self.sel.values[0]
         await interaction.response.edit_message(content=await player_card(qc, rsn),
                                                 view=await player_view(qc, rsn))
+
+
+# ---- linking everyone
+
+async def link_overview(qc: QCStore, note: str = "") -> tuple[str, discord.ui.View | None]:
+    players = await qc.players()
+    unlinked = [p for p in players if not p["user_id"]]
+    lines = [f"\u2705 {p['rsn']}: <@{p['user_id']}>" if p["user_id"] else f"\u274c {p['rsn']}: not linked"
+             for p in sorted(players, key=lambda x: (bool(x["user_id"]), x["rsn"].lower()))]
+    head = f"**Discord links**: {len(players) - len(unlinked)} of {len(players)} linked."
+    if unlinked:
+        head += " Pick an unlinked player below to connect them."
+    else:
+        head += " Everyone is linked."
+    text = (note + head + "\n\n" + "\n".join(lines))[:2000]
+    return text, LinkOverviewView(unlinked) if unlinked else None
+
+
+class LinkOverviewView(discord.ui.View):
+    def __init__(self, unlinked: list[dict]) -> None:
+        super().__init__(timeout=900)
+        sel = discord.ui.Select(placeholder="Pick an unlinked player", options=[
+            discord.SelectOption(label=p["rsn"], value=p["rsn"]) for p in unlinked[:25]])
+        sel.callback = self.pick
+        self.sel = sel
+        self.add_item(sel)
+
+    async def pick(self, interaction: discord.Interaction) -> None:
+        if not await admin_only(interaction):
+            return
+        rsn = self.sel.values[0]
+        await interaction.response.edit_message(content=f"Who is **{rsn}** on Discord? Start typing their name.",
+                                                view=LinkOneView(rsn))
+
+
+class LinkOneView(discord.ui.View):
+    def __init__(self, rsn: str) -> None:
+        super().__init__(timeout=900)
+        self.rsn = rsn
+        sel = discord.ui.UserSelect(placeholder=f"Discord account of {rsn}"[:150])
+        sel.callback = self.pick
+        self.sel = sel
+        self.add_item(sel)
+
+    async def pick(self, interaction: discord.Interaction) -> None:
+        if not await admin_only(interaction):
+            return
+        qc: QCStore = interaction.client.qc
+        user = self.sel.values[0]
+        if user.bot:
+            await interaction.response.send_message("That's a bot. Pick the player's own account.", ephemeral=True)
+            return
+        others = [p["rsn"] for p in await qc.players_of(user.id) if p["rsn"].lower() != self.rsn.lower()]
+        await qc.link(self.rsn, user.id)
+        interaction.client.qc_refresh_soon()
+        note = f"Linked **{self.rsn}** to {user.mention}."
+        if others:
+            note += f" They are also linked to {', '.join(others)}: fine for alts, otherwise fix it in Edit player."
+        text, view = await link_overview(qc, note + "\n\n")
+        await interaction.response.edit_message(content=text, view=view)
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, row=1)
+    async def back(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        text, view = await link_overview(interaction.client.qc)
+        await interaction.response.edit_message(content=text, view=view)
 
 
 # ---- one player
