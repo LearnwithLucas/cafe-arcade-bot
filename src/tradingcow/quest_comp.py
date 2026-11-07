@@ -712,7 +712,7 @@ class QPCheckModal(discord.ui.Modal):
             await interaction.response.send_message(chk.line() + hint, ephemeral=True)
         else:
             await interaction.response.edit_message(content=await player_card(qc, p["rsn"]),
-                                                    view=PlayerView(p["rsn"], await qc.done_of(p["rsn"])))
+                                                    view=await player_view(qc, p["rsn"]))
 
 
 async def show_progress(interaction: discord.Interaction) -> None:
@@ -896,6 +896,7 @@ async def panel_text(qc: QCStore, bot) -> str:
     ch = await bot.qc_channel()
     players = await qc.players()
     linked = sum(1 for p in players if p["user_id"])
+    unlinked = [p["rsn"] for p in players if not p["user_id"]]
     done = await qc.all_done()
     prizes = await qc.prizes()
     return (f"**Quest competition settings**{' (test mode)' if TEST_MODE else ''}\n"
@@ -903,6 +904,7 @@ async def panel_text(qc: QCStore, bot) -> str:
             f"Channel: {ch.mention if ch else 'not found'}. Daily reminder at {await qc.setting('ask_hour', DEFAULT_ASK_HOUR)}:00.\n"
             f"Prizes: {', '.join(f'{place_name(i)} {p}' for i, p in enumerate(prizes))}.\n"
             f"Players: {len(players)} ({linked} linked to Discord). Quests logged: {len(done)}.\n"
+            + (f"**Not linked yet ({len(unlinked)})**: {', '.join(unlinked)}.\n" if unlinked else "Everyone is linked to Discord.\n") +
             f"Admins: {', '.join(f'<@{u}>' for u in sorted(PANEL_ADMINS)) or 'only the testers'}.")
 
 
@@ -1031,7 +1033,7 @@ class AddModal(discord.ui.Modal, title="Add a player"):
         p = await qc.player(rsn)
         await interaction.response.send_message(
             f"{'Already in' if existing else 'Added'}: **{p['rsn']}**.\nPick their Discord account so they can log quests:",
-            view=PlayerView(p["rsn"], []), ephemeral=True)
+            view=await player_view(qc, p["rsn"]), ephemeral=True)
 
 
 class ImportModal(discord.ui.Modal, title="Import players"):
@@ -1066,7 +1068,7 @@ class FindModal(discord.ui.Modal, title="Edit a player"):
             await interaction.response.send_message("No player with that name.", ephemeral=True)
             return
         await interaction.response.send_message(await player_card(qc, p["rsn"]),
-                                                view=PlayerView(p["rsn"], await qc.done_of(p["rsn"])), ephemeral=True)
+                                                view=await player_view(qc, p["rsn"]), ephemeral=True)
 
 
 class PickView(discord.ui.View):
@@ -1074,7 +1076,8 @@ class PickView(discord.ui.View):
         super().__init__(timeout=900)
         sel = discord.ui.Select(placeholder="Player", options=[
             discord.SelectOption(label=p["rsn"], value=p["rsn"],
-                                 description="linked to Discord" if p["user_id"] else "not linked yet") for p in players[:25]])
+                                 description="linked to Discord" if p["user_id"] else "not linked yet")
+            for p in sorted(players, key=lambda x: (bool(x["user_id"]), x["rsn"].lower()))[:25]])
         sel.callback = self.pick
         self.sel = sel
         self.add_item(sel)
@@ -1085,7 +1088,7 @@ class PickView(discord.ui.View):
         qc: QCStore = interaction.client.qc
         rsn = self.sel.values[0]
         await interaction.response.edit_message(content=await player_card(qc, rsn),
-                                                view=PlayerView(rsn, await qc.done_of(rsn)))
+                                                view=await player_view(qc, rsn))
 
 
 # ---- one player
@@ -1098,14 +1101,24 @@ async def player_card(qc: QCStore, rsn: str) -> str:
     return (f"Linked to: {who}.\n" + await progress_text(qc, p))[:2000]
 
 
+async def player_view(qc: QCStore, rsn: str) -> "PlayerView":
+    p = await qc.player(rsn)
+    return PlayerView(rsn, await qc.done_of(rsn), bool(p and p["user_id"]))
+
+
 class PlayerView(discord.ui.View):
-    def __init__(self, rsn: str, done: list[tuple]) -> None:
+    def __init__(self, rsn: str, done: list[tuple], linked: bool = False) -> None:
         super().__init__(timeout=900)
         self.rsn = rsn
-        link = discord.ui.UserSelect(placeholder="Link their Discord account", row=0)
-        link.callback = self.link
-        self.link_select = link
-        self.add_item(link)
+        if linked:  # already linked: no dropdown, only an unlink button for mistakes
+            btn = discord.ui.Button(label="Unlink Discord", style=discord.ButtonStyle.secondary, row=3)
+            btn.callback = self.unlink
+            self.add_item(btn)
+        else:
+            link = discord.ui.UserSelect(placeholder="Link their Discord account", row=0)
+            link.callback = self.link
+            self.link_select = link
+            self.add_item(link)
         if done:
             rm = discord.ui.Select(placeholder="Remove a logged quest", row=1, options=[
                 discord.SelectOption(label=q[0][:100], value=q[0][:100], description=f"+{q[1]} points") for q in done[:25]])
@@ -1113,10 +1126,17 @@ class PlayerView(discord.ui.View):
             self.rm_select = rm
             self.add_item(rm)
 
+    async def unlink(self, interaction: discord.Interaction) -> None:
+        if not await admin_only(interaction):
+            return
+        await interaction.client.qc.link(self.rsn, None)
+        interaction.client.qc_refresh_soon()
+        await self._refresh(interaction, "Unlinked. Pick the right Discord account below.\n")
+
     async def _refresh(self, interaction: discord.Interaction, note: str = "") -> None:
         qc: QCStore = interaction.client.qc
         await interaction.response.edit_message(content=(note + await player_card(qc, self.rsn))[:2000],
-                                                view=PlayerView(self.rsn, await qc.done_of(self.rsn)))
+                                                view=await player_view(qc, self.rsn))
 
     async def link(self, interaction: discord.Interaction) -> None:
         if not await admin_only(interaction):
@@ -1292,7 +1312,7 @@ class ConfirmView(discord.ui.View):
         if self.action == "remove":
             qc: QCStore = interaction.client.qc
             await interaction.response.edit_message(content=await player_card(qc, self.rsn),
-                                                    view=PlayerView(self.rsn, await qc.done_of(self.rsn)))
+                                                    view=await player_view(qc, self.rsn))
         else:
             await interaction.response.edit_message(content="Nothing changed.", view=None)
 
