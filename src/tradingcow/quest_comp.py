@@ -44,7 +44,7 @@ def _names(raw: str) -> set[str]:
     return {x.strip().lower().lstrip("@") for x in re.split(r"[,\s]+", raw) if x.strip()}
 
 
-TEST_MODE = os.getenv("QC_TEST_MODE", "1").strip() not in ("0", "false", "no", "off")
+TEST_MODE = os.getenv("QC_TEST_MODE", "0").strip() not in ("0", "false", "no", "off")
 TESTER_IDS = _ids(os.getenv("QC_TESTER_IDS", ""))
 TESTER_NAMES = _names(os.getenv("QC_TESTER_NAMES", "lucasnotlucas"))
 QC_ADMIN_IDS = _ids(os.getenv("QC_ADMIN_IDS", ""))
