@@ -45,6 +45,30 @@ class Game:
 
 
 GAMES: dict[int, Game] = {}
+TASKS: set[asyncio.Task] = set()  # keep a reference so running games are never garbage collected
+
+
+class Poster:
+    """Posts in the channel; if the bot isn't allowed to (missing Send Messages / Embed Links),
+    it falls back to follow-ups on the /osrsquiz interaction, which need no channel permissions."""
+
+    def __init__(self, interaction: discord.Interaction) -> None:
+        self.interaction = interaction
+        self.channel = interaction.channel
+        self.use_followup = self.channel is None
+
+    async def send(self, delete_after: float | None = None, **kwargs):
+        if not self.use_followup:
+            try:
+                return await self.channel.send(delete_after=delete_after, **kwargs)
+            except discord.Forbidden:
+                log.warning("Quiz: no permission to post in channel %s, using interaction follow-ups",
+                            getattr(self.channel, "id", "?"))
+                self.use_followup = True
+        msg = await self.interaction.followup.send(wait=True, **kwargs)
+        if delete_after:
+            await msg.delete(delay=delete_after)
+        return msg
 
 
 def scoreboard(game: Game, limit: int = 10) -> str:
@@ -88,7 +112,7 @@ class AnswerView(discord.ui.View):
                 item.style = discord.ButtonStyle.success
 
 
-async def run_game(channel: discord.abc.Messageable, game: Game, delay: int = 0) -> None:
+async def run_game(channel: "Poster", game: Game, delay: int = 0) -> None:
     total = len(game.questions)
     try:
         await asyncio.sleep(delay)
@@ -143,7 +167,7 @@ async def run_game(channel: discord.abc.Messageable, game: Game, delay: int = 0)
 
 @app_commands.command(name="osrsquiz", description="Start an OSRS quiz: multiple choice, 20 seconds per question")
 @app_commands.describe(questions="How many questions (default 10)", stop="Stop the quiz that is running")
-async def osrsquiz_cmd(interaction: discord.Interaction, questions: app_commands.Range[int, 1, 40] = 10,
+async def osrsquiz_cmd(interaction: discord.Interaction, questions: app_commands.Range[int, 1, 30] = 10,
                        stop: bool = False) -> None:
     if interaction.channel_id != QUIZ_CHANNEL_ID:
         await interaction.response.send_message(f"The quiz runs in <#{QUIZ_CHANNEL_ID}>.", ephemeral=True)
@@ -171,7 +195,9 @@ async def osrsquiz_cmd(interaction: discord.Interaction, questions: app_commands
                      f"You get {SECONDS} seconds per question. Press a button to answer, one answer each.\n"
                      f"Right answer: 10 points plus 1 point per second left.\n\nFirst question in 5 seconds..."),
         color=COLOR))
-    asyncio.create_task(run_game(interaction.channel, game, delay=5))
+    task = asyncio.create_task(run_game(Poster(interaction), game, delay=5))
+    TASKS.add(task)
+    task.add_done_callback(TASKS.discard)
 
 
 def setup_quiz(bot) -> None:
