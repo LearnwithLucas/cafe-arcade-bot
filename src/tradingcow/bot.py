@@ -19,6 +19,7 @@ from discord.ext import commands, tasks
 
 from . import market
 from .quest_comp import QuestCompMixin
+from .quiz import setup_quiz
 from .store import Store
 from .wiki import Wiki
 
@@ -138,6 +139,7 @@ class TradingCow(QuestCompMixin, commands.Bot):
         for cmd in (price_cmd, flips_cmd, alch_cmd, dumps_cmd, skill_cmd, channel_cmd, channels_cmd, guide_cmd, help_cmd):
             self.tree.add_command(cmd)
         await self.qc_setup()  # quest competition: /quest, /qp_settings and its loop
+        setup_quiz(self)  # /osrsquiz
         if self.guild_ids:
             for gid in self.guild_ids:
                 g = discord.Object(id=gid)
@@ -692,6 +694,7 @@ async def help_cmd(interaction: discord.Interaction) -> None:
         "/tc_channel, /tc_channels: where automatic posts go\n"
         "/tc_guide: repost the channel explainers now\n"
         "/quest: quest competition, log a finished quest or see your progress\n"
+        "/osrsquiz: start an OSRS quiz (multiple choice, 20 seconds per question)\n"
         "/qp_settings: quest competition settings and players (admins)\n\n"
         "Prices come from the OSRS Wiki. The bot never touches your account."))
     await interaction.response.send_message(embed=e, ephemeral=True)
