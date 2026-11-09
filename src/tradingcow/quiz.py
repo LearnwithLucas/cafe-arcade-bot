@@ -1,6 +1,6 @@
 """OSRS quiz for TradingCow: /osrsquiz starts a round of multiple-choice questions, text only.
 
-Each question shows four options (A to D) and a 20 second countdown. Players shout their answer in the chat.
+Each question shows four options (A to D) and a 25 second countdown. Players shout their answer in the chat.
 When time is up the same message shows the right answer, then the next question follows 5 seconds later.
 
 No buttons and no reading the chat, so it works even when the bot can't see or post in the channel:
@@ -23,7 +23,7 @@ from .quiz_questions import QUESTIONS
 log = logging.getLogger("tradingcow.quiz")
 
 QUIZ_CHANNEL_ID = int(os.getenv("QUIZ_CHANNEL_ID", "1465420490758688769"))
-SECONDS = 20
+SECONDS = 25
 PAUSE = 5  # seconds between the answer reveal and the next question
 COLOR = 0xC8A24A
 LETTERS = "ABCD"
@@ -98,9 +98,25 @@ async def run_game(poster: Poster, game: Game, delay: int = 0) -> None:
         GAMES.pop(game.channel_id, None)
 
 
-@app_commands.command(name="osrsquiz", description="Start an OSRS quiz: multiple choice, 20 seconds per question")
-@app_commands.describe(questions="How many questions (default 10)", stop="Stop the quiz that is running")
-async def osrsquiz_cmd(interaction: discord.Interaction, questions: app_commands.Range[int, 1, 30] = 10,
+async def pick_questions(store, count: int) -> list[tuple[str, str, list[str]]]:
+    """No repeats: questions already asked are skipped until the whole list has been used once."""
+    used = set(filter(None, (await store.get("quiz:used") or "").split("\n")))
+    fresh = [q for q in QUESTIONS if q[0] not in used]
+    random.shuffle(fresh)
+    picked = fresh[:count]
+    if len(picked) < count:  # list used up: start a new cycle
+        used = set()
+        rest = [q for q in QUESTIONS if q not in picked]
+        random.shuffle(rest)
+        picked += rest[:count - len(picked)]
+    used.update(q[0] for q in picked)
+    await store.set("quiz:used", "\n".join(sorted(used)))
+    return picked
+
+
+@app_commands.command(name="osrsquiz", description="Start an OSRS quiz: multiple choice, 25 seconds per question")
+@app_commands.describe(questions="How many questions (default 20, max 25)", stop="Stop the quiz that is running")
+async def osrsquiz_cmd(interaction: discord.Interaction, questions: app_commands.Range[int, 1, 25] = 20,
                        stop: bool = False) -> None:
     if interaction.channel_id != QUIZ_CHANNEL_ID:
         await interaction.response.send_message(f"The quiz runs in <#{QUIZ_CHANNEL_ID}>.", ephemeral=True)
@@ -120,7 +136,7 @@ async def osrsquiz_cmd(interaction: discord.Interaction, questions: app_commands
     if running:
         await interaction.response.send_message("A quiz is already running here. Jump in!", ephemeral=True)
         return
-    game = Game(interaction.channel_id, interaction.user.id, random.sample(QUESTIONS, min(questions, len(QUESTIONS))))
+    game = Game(interaction.channel_id, interaction.user.id, await pick_questions(interaction.client.store, questions))
     GAMES[interaction.channel_id] = game
     await interaction.response.send_message(embed=discord.Embed(
         title="⚔️ OSRS Quiz",

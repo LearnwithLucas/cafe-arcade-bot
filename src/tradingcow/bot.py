@@ -694,7 +694,7 @@ async def help_cmd(interaction: discord.Interaction) -> None:
         "/tc_channel, /tc_channels: where automatic posts go\n"
         "/tc_guide: repost the channel explainers now\n"
         "/quest: quest competition, log a finished quest or see your progress\n"
-        "/osrsquiz: start an OSRS quiz (multiple choice, 20 seconds per question)\n"
+        "/osrsquiz: start an OSRS quiz (multiple choice, 25 seconds per question)\n"
         "/qp_settings: quest competition settings and players (admins)\n\n"
         "Prices come from the OSRS Wiki. The bot never touches your account."))
     await interaction.response.send_message(embed=e, ephemeral=True)
