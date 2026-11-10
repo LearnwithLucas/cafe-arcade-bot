@@ -392,7 +392,7 @@ async def play_only(interaction: discord.Interaction) -> bool:
 
 RULES = ("Log every quest you finish during the competition. Points by difficulty: "
          "Novice 1, Intermediate 2, Experienced 4, Master 7, Grandmaster 12. "
-         "Each Recipe for Disaster subquest counts as Experienced. Most points wins.")
+         "Each Recipe for Disaster subquest counts as Experienced. Miniquests count too. Most points wins.")
 
 
 MEDALS = {0: "\U0001F947", 1: "\U0001F948", 2: "\U0001F949"}  # gold, silver, bronze
@@ -793,6 +793,7 @@ def player_guide_embed() -> discord.Embed:
         "**Good to know**\n"
         "Only quests finished between the start and the end count, and each quest counts once. "
         "Each Recipe for Disaster subquest counts as its own quest. "
+        "Miniquests count too: search for them like quests, they start with \"Mini:\". "
         "**See someone's quests** shows anyone's full list. "
         "You can also type `/quest` and pick the quest from the dropdown, with an optional screenshot.\n\n"
         f"Button says you're not on the list? Ask {ORGANISER} to add you and link your Discord account."))

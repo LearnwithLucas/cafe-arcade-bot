@@ -204,3 +204,28 @@ QUESTS: list[tuple[str, str, int]] = [
     ("X Marks the Spot", "Novice", 1),
     ("Zogre Flesh Eaters", "Intermediate", 1),
 ]
+
+# Miniquests (added 10 November 2026, approved mid-competition). They give no Quest Points, so 0 QP for the QP check.
+MINIQUESTS: list[tuple[str, str, int]] = [
+    ("Mini: Alfred Grimhand's Barcrawl", "Novice", 0),
+    ("Mini: Skippy and the Mogres", "Novice", 0),
+    ("Mini: Vale Totems", "Novice", 0),
+    ("Mini: Bear Your Soul", "Intermediate", 0),
+    ("Mini: The Enchanted Key", "Intermediate", 0),
+    ("Mini: Enter the Abyss", "Intermediate", 0),
+    ("Mini: Family Pest", "Intermediate", 0),
+    ("Mini: Barbarian Training", "Experienced", 0),
+    ("Mini: Curse of the Empty Lord", "Experienced", 0),
+    ("Mini: The General's Shadow", "Experienced", 0),
+    ("Mini: His Faithful Servants", "Experienced", 0),
+    ("Mini: In Search of Knowledge", "Experienced", 0),
+    ("Mini: Lair of Tarn Razorlor", "Experienced", 0),
+    ("Mini: Mage Arena I", "Experienced", 0),
+    ("Mini: The Frozen Door", "Master", 0),
+    ("Mini: Hopespear's Will", "Master", 0),
+    ("Mini: Into the Tombs", "Master", 0),
+    ("Mini: Mage Arena II", "Master", 0),
+    ("Mini: The Fractured Archive", "Grandmaster", 0),
+]
+
+QUESTS += MINIQUESTS
