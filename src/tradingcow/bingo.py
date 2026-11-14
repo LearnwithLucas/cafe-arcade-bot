@@ -278,7 +278,7 @@ async def board_message(bs: BingoStore) -> tuple[discord.Embed, discord.File]:
     png = render_board(states, names, "CLAN BINGO")
     e = discord.Embed(title="\U0001F3B2 Clan Bingo (test)", color=EMBED_GOLD, description=(
         "Get drops, submit them with **/bingo_submit** and a screenshot, and light up your team's tiles.\n"
-        "Click a tile below for details. Click \u2605 FREE for help, your team and the tile list.\n"
+        "Pick a tile in the dropdown below for details and progress.\n"
         f"Easy 1 · Medium 2 · Hard 3 · every full line +{LINE_BONUS} · full board +{FULL_BONUS}"))
     for t in TEAMS:
         st = states[t]
@@ -299,8 +299,8 @@ HOW_TO = (
     "4. An admin approves it and your team's strip on the board lights up.\n\n"
     "**Scoring**: Easy 1, Medium 2, Hard 3 points. Every full row, column or diagonal +5. Full board +15. "
     "The FREE centre counts for lines.\n"
-    "**The board**: click any tile for details and team progress. Grey = open, red = red team has it, "
-    "blue = blue team has it, green = both teams. In the picture, the left strip is red and the right strip is blue.")
+    "**The board**: in the picture, the left strip of each tile is the red team and the right strip is the blue team. "
+    "Pick a tile in the dropdown for details: \u2b1c open, \U0001F534 red has it, \U0001F535 blue has it, \u2705 both.")
 
 
 async def my_team_text(bs: "BingoStore", user_id: int) -> str:
@@ -359,52 +359,49 @@ async def tile_detail(bs: "BingoStore", i: int, user_id: int) -> str:
     return "\n".join(lines)
 
 
-def tile_button_label(i: int, states: dict | None) -> str:
+def tile_option(i: int, states: dict | None) -> discord.SelectOption:
     name, diff, target, _ = TILES[i]
-    if i == FREE_INDEX:
-        return "\u2605 FREE \u00b7 info"
-    label = f"{name} \u00b7 {POINTS[diff]}"
-    if states and target > 1 and not all(i in states[t].done for t in TEAMS) \
-            and any(states[t].progress.get(i, 0) for t in TEAMS):
-        label += " (" + " ".join(f"{TEAM_DOT[t]}{min(states[t].progress.get(i, 0), target)}" for t in TEAMS) + f" /{target})"
-    return label[:80]
-
-
-def tile_button_style(i: int, states: dict | None) -> discord.ButtonStyle:
-    if i == FREE_INDEX:
-        return discord.ButtonStyle.secondary  # green is reserved for "both teams have it"
-    if not states:
-        return discord.ButtonStyle.secondary
-    red, blue = i in states["red"].done, i in states["blue"].done
-    if red and blue:
-        return discord.ButtonStyle.success
-    if red:
-        return discord.ButtonStyle.danger
-    if blue:
-        return discord.ButtonStyle.primary
-    return discord.ButtonStyle.secondary
+    pts = POINTS[diff]
+    bits = [f"{diff}, {pts} pt{'s' if pts != 1 else ''}"]
+    if states:
+        for t in TEAMS:
+            st = states[t]
+            if i in st.done:
+                bits.append(f"{TEAM_DOT[t]} done")
+            elif target > 1 and st.progress.get(i, 0):
+                bits.append(f"{TEAM_DOT[t]} {st.progress[i]}/{target}")
+    done = [t for t in TEAMS if states and i in states[t].done]
+    emoji = "\u2705" if len(done) == 2 else (TEAM_DOT[done[0]] if done else "\u2b1c")
+    return discord.SelectOption(label=name, value=str(i), description=" \u00b7 ".join(bits)[:100], emoji=emoji)
 
 
 class BoardView(discord.ui.View):
-    """The board as 25 real buttons (5 rows of 5). Colour: red team done, blue team done, green both, grey open.
-    Click a tile for details; the FREE centre opens the info menu. Persistent: custom ids bingo:tile:<n>."""
+    """Under the board: one dropdown with every tile (status per team) and three buttons. Persistent."""
 
     def __init__(self, states: dict | None = None) -> None:
         super().__init__(timeout=None)
-        for i in range(25):
-            btn = discord.ui.Button(label=tile_button_label(i, states), style=tile_button_style(i, states),
-                                    custom_id=f"bingo:tile:{i}", row=i // 5)
-            btn.callback = self._make_callback(i)
-            self.add_item(btn)
+        sel = discord.ui.Select(custom_id="bingo:pick", placeholder="\U0001F50E Pick a tile to see details and progress",
+                                options=[tile_option(i, states) for i in range(25) if i != FREE_INDEX], row=0)
+        sel.callback = self.pick
+        self.add_item(sel)
 
-    def _make_callback(self, i: int):
-        async def callback(interaction: discord.Interaction) -> None:
-            bs: BingoStore = interaction.client.bingo
-            if i == FREE_INDEX:
-                await interaction.response.send_message(HOW_TO, view=InfoView(), ephemeral=True)
-            else:
-                await interaction.response.send_message(await tile_detail(bs, i, interaction.user.id), ephemeral=True)
-        return callback
+    async def pick(self, interaction: discord.Interaction) -> None:
+        i = int(interaction.data["values"][0])
+        await interaction.response.send_message(await tile_detail(interaction.client.bingo, i, interaction.user.id),
+                                                ephemeral=True)
+
+    @discord.ui.button(label="How to submit", style=discord.ButtonStyle.success, custom_id="bingo:how", row=1)
+    async def how(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await interaction.response.send_message(HOW_TO, ephemeral=True)
+
+    @discord.ui.button(label="My team", style=discord.ButtonStyle.primary, custom_id="bingo:team", row=1)
+    async def team(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await interaction.response.send_message(await my_team_text(interaction.client.bingo, interaction.user.id),
+                                                ephemeral=True)
+
+    @discord.ui.button(label="Tile list", style=discord.ButtonStyle.secondary, custom_id="bingo:tiles", row=1)
+    async def tiles(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        await interaction.response.send_message(tile_list_text(), ephemeral=True)
 
 
 class InfoView(discord.ui.View):
