@@ -9,6 +9,7 @@ POINTS = {"Novice": 1, "Intermediate": 2, "Experienced": 4, "Master": 7, "Grandm
 QUESTS: list[tuple[str, str, int]] = [
     ("A Kingdom Divided", "Experienced", 2),
     ("A Night at the Theatre", "Master", 2),
+    ("A Shell of a Friend", "Intermediate", 2),  # released 11 November 2026
     ("A Porcine of Interest", "Novice", 1),
     ("A Ruff Situation", "Novice", 1),
     ("A Soul's Bane", "Intermediate", 1),
