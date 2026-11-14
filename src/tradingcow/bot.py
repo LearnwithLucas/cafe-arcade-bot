@@ -167,6 +167,21 @@ class TradingCow(QuestCompMixin, commands.Bot):
 
     async def on_ready(self) -> None:
         log.info("TradingCow logged in as %s", self.user)
+        if not getattr(self, "_pinged", False):  # on_ready can fire again after a reconnect
+            self._pinged = True
+            asyncio.create_task(self.ping_test_channel())
+
+    async def ping_test_channel(self) -> None:
+        """Test channel: post 'Ping' and edit it to 'Pong' once per start, to check the bot can post there."""
+        cid = int(os.getenv("TEST_CHANNEL_ID", "1571254714836983848"))
+        try:
+            ch = self.get_channel(cid) or await self.fetch_channel(cid)
+            start = time.monotonic()
+            msg = await ch.send("\U0001F3D3 Ping!")
+            ms = int((time.monotonic() - start) * 1000)
+            await msg.edit(content=f"\U0001F3D3 Pong! TradingCow is online and can post here ({ms} ms).")
+        except Exception as e:  # never let the test break anything else
+            log.warning("Test channel %s: could not ping (%s)", cid, e)
 
     # ------------------------------------------------------------ data
     async def refresh_prices(self, force: bool = False) -> None:
