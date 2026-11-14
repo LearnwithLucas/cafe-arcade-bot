@@ -20,6 +20,7 @@ from discord.ext import commands, tasks
 from . import market
 from .quest_comp import QuestCompMixin
 from .quiz import setup_quiz
+from .bingo import setup_bingo
 from .store import Store
 from .wiki import Wiki
 
@@ -140,6 +141,7 @@ class TradingCow(QuestCompMixin, commands.Bot):
             self.tree.add_command(cmd)
         await self.qc_setup()  # quest competition: /quest, /qp_settings and its loop
         setup_quiz(self)  # /osrsquiz
+        await setup_bingo(self)  # /bingo_submit, /bingo_settings
         if self.guild_ids:
             for gid in self.guild_ids:
                 g = discord.Object(id=gid)
@@ -170,6 +172,7 @@ class TradingCow(QuestCompMixin, commands.Bot):
         if not getattr(self, "_pinged", False):  # on_ready can fire again after a reconnect
             self._pinged = True
             asyncio.create_task(self.ping_test_channel())
+            asyncio.create_task(self.bingo_refresh())
 
     async def ping_test_channel(self) -> None:
         """Test channel: post 'Ping' and edit it to 'Pong' once per start, to check the bot can post there."""
