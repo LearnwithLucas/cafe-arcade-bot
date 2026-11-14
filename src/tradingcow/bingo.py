@@ -278,6 +278,7 @@ async def board_message(bs: BingoStore) -> tuple[discord.Embed, discord.File]:
     png = render_board(states, names, "CLAN BINGO")
     e = discord.Embed(title="\U0001F3B2 Clan Bingo (test)", color=EMBED_GOLD, description=(
         "Get drops, submit them with **/bingo_submit** and a screenshot, and light up your team's tiles.\n"
+        "Click a tile below for details. Click \u2605 FREE for help, your team and the tile list.\n"
         f"Easy 1 · Medium 2 · Hard 3 · every full line +{LINE_BONUS} · full board +{FULL_BONUS}"))
     for t in TEAMS:
         st = states[t]
@@ -298,49 +299,126 @@ HOW_TO = (
     "4. An admin approves it and your team's strip on the board lights up.\n\n"
     "**Scoring**: Easy 1, Medium 2, Hard 3 points. Every full row, column or diagonal +5. Full board +15. "
     "The FREE centre counts for lines.\n"
-    "**Strips**: left is red team, right is blue team. Numbers like 40/100 show team progress.")
+    "**The board**: click any tile for details and team progress. Grey = open, red = red team has it, "
+    "blue = blue team has it, green = both teams. In the picture, the left strip is red and the right strip is blue.")
+
+
+async def my_team_text(bs: "BingoStore", user_id: int) -> str:
+    team = await bs.team_of(user_id)
+    if not team:
+        return "You aren't in a team yet. Ask an admin to add you."
+    names, states, members = await bs.names(), await bs.states(), await bs.members()
+    st = states[team]
+    todo = [i for i in range(25) if i not in st.done]
+    lines = [f"**{names[team]}**: {st.points} point{'s' if st.points != 1 else ''}, {len(st.done) - 1} tiles, "
+             f"{st.lines} line{'s' if st.lines != 1 else ''}.",
+             "Members: " + ", ".join(f"<@{u}>" for u in members[team]), "", "**Still open**"]
+    for i in todo:
+        have = st.progress.get(i, 0)
+        extra = f" ({have}/{TILES[i][2]})" if TILES[i][2] > 1 else ""
+        lines.append(f"\u2022 {TILES[i][0]}{extra}")
+    pend = await bs.pending(team)
+    if pend:
+        lines += ["", "**Waiting for approval**: " + ", ".join(TILES[p[2]][0] for p in pend)]
+    return "\n".join(lines)[:2000]
+
+
+def tile_list_text() -> str:
+    lines = []
+    for diff in ("Easy", "Medium", "Hard"):
+        lines.append(f"**{diff} ({POINTS[diff]} pt{'s' if POINTS[diff] > 1 else ''})**")
+        for name, d, target, how in TILES:
+            if d == diff:
+                lines.append(f"\u2022 {name}" + (f" (team total {target})" if target > 1 else "") + f": {how}")
+    return "\n".join(lines)[:2000]
+
+
+async def tile_detail(bs: "BingoStore", i: int, user_id: int) -> str:
+    name, diff, target, how = TILES[i]
+    states, names = await bs.states(), await bs.names()
+    pts = POINTS[diff]
+    lines = [f"**{name}**", f"{diff}, {pts} point{'s' if pts != 1 else ''}" + (f", team total {target}" if target > 1 else ""),
+             f"Proof: {how}", ""]
+    for t in TEAMS:
+        st = states[t]
+        if i in st.done:
+            status = "\u2705 done"
+        elif target > 1:
+            status = f"{st.progress.get(i, 0)}/{target}"
+        else:
+            status = "not yet"
+        lines.append(f"{TEAM_DOT[t]} {names[t]}: {status}")
+    pend = [p for p in await bs.pending() if p[2] == i]
+    if pend:
+        lines.append("Waiting for approval: " + ", ".join(f"{names[p[1]]} (<@{p[3]}>)" for p in pend))
+    team = await bs.team_of(user_id)
+    if team and i not in states[team].done:
+        lines += ["", f"Got it? Type **/bingo_submit**, pick **{name}** and attach your screenshot."]
+    elif not team:
+        lines += ["", "You aren't in a team yet. Ask an admin to add you."]
+    return "\n".join(lines)
+
+
+def tile_button_label(i: int, states: dict | None) -> str:
+    name, diff, target, _ = TILES[i]
+    if i == FREE_INDEX:
+        return "\u2605 FREE \u00b7 info"
+    label = f"{name} \u00b7 {POINTS[diff]}"
+    if states and target > 1 and not all(i in states[t].done for t in TEAMS) \
+            and any(states[t].progress.get(i, 0) for t in TEAMS):
+        label += " (" + " ".join(f"{TEAM_DOT[t]}{min(states[t].progress.get(i, 0), target)}" for t in TEAMS) + f" /{target})"
+    return label[:80]
+
+
+def tile_button_style(i: int, states: dict | None) -> discord.ButtonStyle:
+    if i == FREE_INDEX:
+        return discord.ButtonStyle.secondary  # green is reserved for "both teams have it"
+    if not states:
+        return discord.ButtonStyle.secondary
+    red, blue = i in states["red"].done, i in states["blue"].done
+    if red and blue:
+        return discord.ButtonStyle.success
+    if red:
+        return discord.ButtonStyle.danger
+    if blue:
+        return discord.ButtonStyle.primary
+    return discord.ButtonStyle.secondary
 
 
 class BoardView(discord.ui.View):
-    """Persistent buttons under the board."""
+    """The board as 25 real buttons (5 rows of 5). Colour: red team done, blue team done, green both, grey open.
+    Click a tile for details; the FREE centre opens the info menu. Persistent: custom ids bingo:tile:<n>."""
 
-    def __init__(self) -> None:
+    def __init__(self, states: dict | None = None) -> None:
         super().__init__(timeout=None)
+        for i in range(25):
+            btn = discord.ui.Button(label=tile_button_label(i, states), style=tile_button_style(i, states),
+                                    custom_id=f"bingo:tile:{i}", row=i // 5)
+            btn.callback = self._make_callback(i)
+            self.add_item(btn)
 
-    @discord.ui.button(label="How to submit", style=discord.ButtonStyle.success, custom_id="bingo:how")
-    async def how(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
-        await interaction.response.send_message(HOW_TO, ephemeral=True)
+    def _make_callback(self, i: int):
+        async def callback(interaction: discord.Interaction) -> None:
+            bs: BingoStore = interaction.client.bingo
+            if i == FREE_INDEX:
+                await interaction.response.send_message(HOW_TO, view=InfoView(), ephemeral=True)
+            else:
+                await interaction.response.send_message(await tile_detail(bs, i, interaction.user.id), ephemeral=True)
+        return callback
 
-    @discord.ui.button(label="My team", style=discord.ButtonStyle.secondary, custom_id="bingo:team")
+
+class InfoView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+
+    @discord.ui.button(label="My team", style=discord.ButtonStyle.primary)
     async def team(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
-        bs: BingoStore = interaction.client.bingo
-        team = await bs.team_of(interaction.user.id)
-        if not team:
-            await interaction.response.send_message("You aren't in a team yet. Ask an admin to add you.", ephemeral=True)
-            return
-        names, states, members = await bs.names(), await bs.states(), await bs.members()
-        st = states[team]
-        todo = [i for i in range(25) if i not in st.done]
-        lines = [f"**{names[team]}**: {st.points} point{'s' if st.points != 1 else ''}, {len(st.done) - 1} tiles, {st.lines} lines.",
-                 "Members: " + ", ".join(f"<@{u}>" for u in members[team]), "", "**Still open**"]
-        for i in todo:
-            have = st.progress.get(i, 0)
-            extra = f" ({have}/{TILES[i][2]})" if TILES[i][2] > 1 else ""
-            lines.append(f"• {TILES[i][0]}{extra}")
-        pend = await bs.pending(team)
-        if pend:
-            lines += ["", "**Waiting for approval**: " + ", ".join(TILES[p[2]][0] for p in pend)]
-        await interaction.response.send_message("\n".join(lines)[:2000], ephemeral=True)
+        await interaction.response.send_message(await my_team_text(interaction.client.bingo, interaction.user.id),
+                                                ephemeral=True)
 
-    @discord.ui.button(label="Tile list", style=discord.ButtonStyle.secondary, custom_id="bingo:tiles")
+    @discord.ui.button(label="Tile list", style=discord.ButtonStyle.secondary)
     async def tiles(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
-        lines = []
-        for diff in ("Easy", "Medium", "Hard"):
-            lines.append(f"**{diff} ({POINTS[diff]} pt{'s' if POINTS[diff] > 1 else ''})**")
-            for name, d, target, how in TILES:
-                if d == diff:
-                    lines.append(f"• {name}" + (f" (team total {target})" if target > 1 else "") + f": {how}")
-        await interaction.response.send_message("\n".join(lines)[:2000], ephemeral=True)
+        await interaction.response.send_message(tile_list_text(), ephemeral=True)
 
 
 class ReviewView(discord.ui.View):
@@ -582,11 +660,11 @@ async def setup_bingo(bot) -> None:
                     if repost:
                         await msg.delete()
                     else:
-                        await msg.edit(embed=embed, attachments=[file], view=BoardView())
+                        await msg.edit(embed=embed, attachments=[file], view=BoardView(await bot.bingo.states()))
                         return
                 except discord.HTTPException:
                     pass
-            msg = await ch.send(embed=embed, file=file, view=BoardView())
+            msg = await ch.send(embed=embed, file=file, view=BoardView(await bot.bingo.states()))
             await bot.store.set(key, str(msg.id))
         except Exception:
             log.exception("Bingo board refresh failed")
