@@ -156,6 +156,7 @@ QUESTS: list[tuple[str, str, int]] = [
     ("Temple of the Eye", "Intermediate", 1),
     ("The Ascent of Arceuus", "Intermediate", 1),
     ("The Blood Moon Rises", "Grandmaster", 4),
+    ("The Birds and the Wasps", "Novice", 1),  # released 11 November 2026
     ("The Corsair Curse", "Intermediate", 2),
     ("The Curse of Arrav", "Master", 2),
     ("The Depths of Despair", "Intermediate", 1),
