@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from typing import Any
 
 import discord
 from telegram import Bot
-from telegram.error import TelegramError
+from telegram.error import BadRequest, TelegramError
 
 from src.config.channels import (
     DISCORD_GAME_INSTRUCTIONS,
@@ -138,9 +139,17 @@ class DiscordInstructionPublisher:
 
 
 class TelegramInstructionPublisher:
-    def __init__(self, *, bot: Bot, chat_ids: Iterable[int]) -> None:
+    """
+    Posts the game instructions once in the game room (forum topic) and keeps
+    them up to date by editing that same message. The message id is stored,
+    so a restart never posts a new copy.
+    """
+
+    def __init__(self, *, bot: Bot, chat_ids: Iterable[int], thread_id: int | None = None, kv: Any = None) -> None:
         self._bot = bot
         self._chat_ids = tuple(dict.fromkeys(chat_ids))
+        self._thread_id = thread_id
+        self._kv = kv
 
     async def publish_all(self) -> None:
         if not self._chat_ids:
@@ -149,34 +158,50 @@ class TelegramInstructionPublisher:
 
         me = await self._bot.get_me()
         text = build_telegram_instruction_text(me.username)
-        marker = "instructions:telegram:main:v1"
 
         for chat_id in self._chat_ids:
-            await self._publish_one(chat_id=chat_id, text=text, marker=marker)
+            await self._publish_one(chat_id=chat_id, text=text)
 
-    async def _publish_one(self, *, chat_id: int, text: str, marker: str) -> None:
+    def _kv_key(self, chat_id: int) -> str:
+        return f"tg_instructions_msg:{chat_id}:{self._thread_id or 0}"
+
+    async def _publish_one(self, *, chat_id: int, text: str) -> None:
+        stored_id = None
+        if self._kv is not None:
+            try:
+                raw = await self._kv.kv_get(None, self._kv_key(chat_id))
+                stored_id = int(raw) if raw else None
+            except Exception:
+                logger.exception("Instructions: could not read stored Telegram message id")
+
         try:
-            chat = await self._bot.get_chat(chat_id)
-            pinned = chat.pinned_message
-            if pinned and pinned.text and marker in pinned.text:
-                await self._bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=pinned.message_id,
-                    text=text,
-                )
-                logger.info("Instructions: updated Telegram instructions in chat %s", chat_id)
-                return
+            if stored_id:
+                try:
+                    await self._bot.edit_message_text(chat_id=chat_id, message_id=stored_id, text=text)
+                    logger.info("Instructions: updated Telegram instructions in chat %s", chat_id)
+                    return
+                except BadRequest as e:
+                    if "not modified" in str(e).lower():
+                        return
+                    # Message was deleted: post a new one below.
+                    logger.info("Instructions: stored message gone in chat %s, posting again", chat_id)
 
             message = await self._bot.send_message(
                 chat_id=chat_id,
+                message_thread_id=self._thread_id,
                 text=text,
                 disable_notification=True,
             )
-            await self._bot.pin_chat_message(
-                chat_id=chat_id,
-                message_id=message.message_id,
-                disable_notification=True,
-            )
-            logger.info("Instructions: posted and pinned Telegram instructions in chat %s", chat_id)
+            try:
+                await self._bot.pin_chat_message(
+                    chat_id=chat_id,
+                    message_id=message.message_id,
+                    disable_notification=True,
+                )
+            except TelegramError:
+                logger.exception("Instructions: could not pin Telegram instructions in chat %s", chat_id)
+            if self._kv is not None:
+                await self._kv.kv_set(None, self._kv_key(chat_id), str(message.message_id))
+            logger.info("Instructions: posted Telegram instructions in chat %s thread %s", chat_id, self._thread_id)
         except TelegramError:
             logger.exception("Instructions: failed to post Telegram instructions in chat %s", chat_id)

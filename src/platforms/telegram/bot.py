@@ -56,6 +56,20 @@ def _admin_user_ids() -> set[int]:
     return _parse_id_list(raw)
 
 
+def _game_thread_id() -> int | None:
+    """
+    The forum topic the bot plays in (the game room). The bot ignores
+    everything outside it. Default: the Online English Café game room.
+    Set TELEGRAM_GAME_THREAD_ID=0 to allow every topic again.
+    """
+    raw = os.getenv("TELEGRAM_GAME_THREAD_ID", "671039").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value or None
+
+
 def _discovery_mode() -> bool:
     return os.getenv("TG_DISCOVERY_MODE", "0").strip() == "1"
 
@@ -118,8 +132,10 @@ class TelegramBot:
         wordle: TelegramWordleGame,
         unscramble: TelegramUnscrambleGame,
         word_chain: TelegramWordChainGame,
+        kv: Any = None,
     ) -> None:
         self._token = token
+        self._kv = kv
         self._wordle = wordle
         self._unscramble = unscramble
         self._word_chain = word_chain
@@ -131,9 +147,27 @@ class TelegramBot:
             return _discovery_mode()
         return chat_id in allowed
 
+    def _in_game_room(self, update: Update) -> bool:
+        game_thread = _game_thread_id()
+        if game_thread is None:
+            return True
+        message = update.effective_message
+        thread_id = message.message_thread_id if message else None
+        return thread_id == game_thread
+
     async def _guard(self, update: Update) -> bool:
         if not self._is_allowed(update.effective_chat.id):
             log.warning("TG: blocked message from chat_id=%s", update.effective_chat.id)
+            return False
+        if not self._in_game_room(update):
+            # Stay silent outside the game room.
+            message = update.effective_message
+            if message and message.text and message.text.startswith("/"):
+                log.info(
+                    "TG: ignored command outside game room chat_id=%s thread=%s",
+                    update.effective_chat.id,
+                    message.message_thread_id,
+                )
             return False
         return True
 
@@ -143,17 +177,20 @@ class TelegramBot:
         chat_id = update.effective_chat.id
         user = update.effective_user
         is_admin = user and user.id in _admin_user_ids()
+        is_private = update.effective_chat.type == "private"
 
-        if _discovery_mode() or is_admin:
+        # Setup info: only in discovery mode, or for an admin in a private chat.
+        if _discovery_mode() or (is_admin and is_private):
             await update.message.reply_text(
-                "Chat ID: `" + str(chat_id) + "`\n\n"
+                "Chat ID: `" + str(chat_id) + "`\n"
+                "Thread ID: `" + str(update.effective_message.message_thread_id) + "`\n\n"
                 "Add this to TELEGRAM\\_ALLOWED\\_CHAT\\_IDS on Render, "
                 "then set TG\\_DISCOVERY\\_MODE=0 and redeploy.",
                 parse_mode="Markdown"
             )
             log.info("TG /start: chat_id=%s user=%s", chat_id, user.id if user else "?")
 
-        if not self._is_allowed(chat_id):
+        if not await self._guard(update):
             return
 
         await update.message.reply_text(
@@ -410,6 +447,8 @@ class TelegramBot:
             await TelegramInstructionPublisher(
                 bot=app.bot,
                 chat_ids=_instruction_chat_ids(),
+                thread_id=_game_thread_id(),
+                kv=self._kv,
             ).publish_all()
             await app.updater.start_polling(drop_pending_updates=True)
             log.info("Telegram bot running as @JerrytheDuckBot")
@@ -440,4 +479,5 @@ def build_telegram_bot(*, services: dict[str, Any], token: str) -> TelegramBot:
             users_repo=services["users_repo"],
             wordlist=services["wordlist"],
         ),
+        kv=services["users_repo"],
     )
