@@ -194,8 +194,8 @@ class TelegramBot:
             return
 
         await update.message.reply_text(
-            "Jerry The Duck reporting for duty.\n\n"
-            "Games available:\n"
+            "Welcome to the Café Arcade.\n\n"
+            "Pick a game:\n"
             "/wordle - guess the 5-letter word\n"
             "/unscramble - unscramble a word\n"
             "/wordchain - build a word chain\n\n"
@@ -206,7 +206,7 @@ class TelegramBot:
         if not await self._guard(update):
             return
         await update.message.reply_text(
-            "Jerry The Duck - word games\n\n"
+            "Café Arcade: word games\n\n"
             "Wordle:\n"
             "/wordle - start today's puzzle\n"
             "/hint - get a letter hint\n"
@@ -451,7 +451,7 @@ class TelegramBot:
                 kv=self._kv,
             ).publish_all()
             await app.updater.start_polling(drop_pending_updates=True)
-            log.info("Telegram bot running as @JerrytheDuckBot")
+            log.info("Telegram bot running as @%s", app.bot.username)
             await asyncio.Event().wait()
 
     async def stop(self) -> None:
