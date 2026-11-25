@@ -8,6 +8,7 @@ Admins pick the competition with /sotw_settings. No XP is stored here: Wise Old 
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -32,6 +33,7 @@ DEFAULT_COMPETITION = int(os.getenv("SOTW_COMPETITION_ID", "161485"))
 COLOR = 0x2E8B57
 TZ = ZoneInfo("Europe/Amsterdam")
 DEFAULT_LABEL = os.getenv("SOTW_LABEL", "Thieving")
+PRIZE_PLACES = int(os.getenv("SOTW_PRIZE_PLACES", "5"))  # top 5 win something, even before amounts are set
 DEFAULT_BANNER = os.getenv("SOTW_BANNER",
                            "https://learnwithlucas.com/wp-content/uploads/2026/11/Twilight-Thieving-Skill-Showcase.jpg")
 MEDALS = ["\U0001F947", "\U0001F948", "\U0001F949"]
@@ -113,7 +115,8 @@ def place_name(i: int) -> str:
     return f"{n}{suffix}"
 
 
-def board_embeds(comp: dict, label: str, prizes: list[str], banner: str) -> list[discord.Embed]:
+def board_embeds(comp: dict, label: str, prizes: list[str], banner: str,
+                 prev_ranks: dict[str, int] | None = None) -> list[discord.Embed]:
     """Same layout as the quest competition: a header card with rules, prizes and banner, then the leaderboard."""
     start, end, now = ts(comp["startsAt"]), ts(comp["endsAt"]), time.time()
     if now < start:
@@ -139,26 +142,39 @@ def board_embeds(comp: dict, label: str, prizes: list[str], banner: str) -> list
     head.set_footer(text=f"Updated {datetime.now(TZ).strftime('%d %b %H:%M')} Amsterdam time \u00b7 data from Wise Old Man")
 
     board = discord.Embed(title="Leaderboard", color=COLOR)
-    places = max(len(prizes), 3)
+    places = max(len(prizes), PRIZE_PLACES)
+    cutoff = active[places - 1]["gained"] if len(active) >= places else 0
+    prev = prev_ranks or {}
     lines: list[str] = []
     for i, r in enumerate(active[:25]):
-        if i == places and i > 0:
-            lines.append("")  # gap between the prize places and the rest
-        if i < 3:
-            mark = MEDALS[i]
-        elif i < len(prizes):
-            mark = "\U0001F3C5"
-        else:
-            mark = f"`{i + 1:>2}.`"
+        if i == places:
+            lines.append(f"\u2500\u2500\u2500 \U0001F3C6 prize line: {place_name(places - 1)} has {fmt_xp(cutoff)} XP \u2500\u2500\u2500")
+        mark = MEDALS[i] if i < 3 else "\U0001F3C5" if i < places else f"`{i + 1:>2}.`"
+        was = prev.get(r["username"])
+        move = ""
+        if was is not None and was != i + 1:
+            move = f" \u2B06\uFE0F{was - i - 1}" if was > i + 1 else f" \u2B07\uFE0F{i + 1 - was}"
+        elif was is None and prev:
+            move = " \U0001F195"
         prize = f" \u00b7 {prizes[i]}" if i < len(prizes) else ""
-        lines.append(f"{mark} **{r['name']}**: **{fmt_xp(r['gained'])} XP**{prize}")
         if i < places:
-            lv = (f"level {r['lv_start']} \u2192 {r['lv_end']}"
-                  if r["lv_start"] is not None and r["lv_end"] is not None and r["lv_end"] > r["lv_start"]
-                  else f"level {r['lv_end']}" if r["lv_end"] is not None else "")
-            lines.append(f"\u2003\u2514 {r['gained']:,} XP" + (f" \u00b7 {lv}" if lv else ""))
+            lines.append(f"{mark} **{r['name']}**: **{fmt_xp(r['gained'])} XP**{prize}{move}")
+            bits = [f"{r['gained']:,} XP"]
+            if r["lv_start"] is not None and r["lv_end"] is not None and r["lv_end"] > r["lv_start"]:
+                bits.append(f"level {r['lv_start']} \u2192 {r['lv_end']}")
+            if i > 0:
+                bits.append(f"{fmt_xp(active[i - 1]['gained'] - r['gained'])} behind {place_name(i - 1)}")
+            if r.get("updated"):
+                bits.append(f"updated <t:{ts(r['updated'])}:R>")
+            lines.append("\u2003\u2514 " + " \u00b7 ".join(bits))
+        else:
+            gap = (f" \u00b7 {fmt_xp(cutoff - r['gained'])} to the prize line"
+                   if cutoff > r["gained"] and i < places + 5 else "")  # the chasing pack only, keeps the list calm
+            lines.append(f"{mark} {r['name']}: {fmt_xp(r['gained'])} XP{gap}{move}")
     if len(active) > 25:
         lines.append(f"and {len(active) - 25} more: press **Full leaderboard**")
+    if prev:
+        lines += ["", "*\u2B06\uFE0F\u2B07\uFE0F places moved since the last update \u00b7 \U0001F195 new on the board*"]
     board.description = "\n".join(lines)[:4096] or "Nobody has gained XP yet."
     return [head, board]
 
@@ -387,9 +403,17 @@ class SotwMixin:
             comp = await self.wom.competition(cid)
             chid = await self.sotw_channel_id()
             ch = self.get_channel(chid) or await self.fetch_channel(chid)
+            rank_key = f"sotw:ranks:{cid}"
+            try:
+                prev = json.loads(await self.store.get(rank_key) or "{}")
+            except ValueError:
+                prev = {}
             embeds = board_embeds(comp, await self.sotw_setting("label", DEFAULT_LABEL),
                                   [p.strip() for p in (await self.sotw_setting("prizes", "")).split(",") if p.strip()],
-                                  await self.sotw_setting("banner", DEFAULT_BANNER))
+                                  await self.sotw_setting("banner", DEFAULT_BANNER), prev)
+            now_ranks = {r["username"]: i + 1 for i, r in enumerate(x for x in standings(comp) if x["gained"] > 0)}
+            if now_ranks != prev:
+                await self.store.set(rank_key, json.dumps(now_ranks))
             view = SotwView(cid)
             key = f"sotw:msg:{ch.id}"
             old = await self.store.get(key)
