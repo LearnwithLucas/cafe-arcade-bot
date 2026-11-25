@@ -13,6 +13,7 @@ import os
 import re
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import aiohttp
 import discord
@@ -29,6 +30,10 @@ USER_AGENT = "TradingCow Discord bot (github.com/LearnwithLucas/cafe-arcade-bot)
 SOTW_CHANNEL_ID = int(os.getenv("SOTW_CHANNEL_ID", "1571254714836983848"))
 DEFAULT_COMPETITION = int(os.getenv("SOTW_COMPETITION_ID", "161485"))
 COLOR = 0x2E8B57
+TZ = ZoneInfo("Europe/Amsterdam")
+DEFAULT_LABEL = os.getenv("SOTW_LABEL", "Thieving")
+DEFAULT_BANNER = os.getenv("SOTW_BANNER",
+                           "https://learnwithlucas.com/wp-content/uploads/2026/11/Twilight-Thieving-Skill-Showcase.jpg")
 MEDALS = ["\U0001F947", "\U0001F948", "\U0001F949"]
 SKILL_EMOJI = {
     "thieving": "\U0001F977", "agility": "\U0001F3C3", "woodcutting": "\U0001FA93", "fishing": "\U0001F3A3",
@@ -102,35 +107,60 @@ def standings(comp: dict) -> list[dict]:
     return sorted(rows, key=lambda r: (-r["gained"], r["name"].lower()))
 
 
-def board_embed(comp: dict, limit: int = 10) -> discord.Embed:
-    metric = comp.get("metric", "")
+def place_name(i: int) -> str:
+    n = i + 1
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def board_embeds(comp: dict, label: str, prizes: list[str], banner: str) -> list[discord.Embed]:
+    """Same layout as the quest competition: a header card with rules, prizes and banner, then the leaderboard."""
     start, end, now = ts(comp["startsAt"]), ts(comp["endsAt"]), time.time()
     if now < start:
-        state = f"Starts <t:{start}:f> (<t:{start}:R>)"
+        state = f"Starts <t:{start}:f> (<t:{start}:R>). Ends <t:{end}:f>."
     elif now < end:
-        state = f"\U0001F7E2 Live · ends <t:{end}:f> (<t:{end}:R>)"
+        state = f"Live now. Ends <t:{end}:f> (<t:{end}:R>)."
     else:
-        state = f"\U0001F3C1 Finished <t:{end}:f>"
+        state = f"Finished <t:{end}:f>. Final results."
     rows = standings(comp)
     active = [r for r in rows if r["gained"] > 0]
     total = sum(r["gained"] for r in rows)
-    e = discord.Embed(title=f"{SKILL_EMOJI.get(metric, CHART)} {comp['title']}", url=f"{SITE}/competitions/{comp['id']}",
-                      color=COLOR, description=(
-                          f"{state}\n**Skill**: {metric.title()} · **Players**: {len(active)} of {comp.get('participantCount', len(rows))} "
-                          f"gained XP · **Clan total**: {fmt_xp(total)} XP"))
-    lines = []
-    for i, r in enumerate(active[:limit]):
-        mark = MEDALS[i] if i < 3 else f"`{i + 1:>2}.`"
-        lv = ""
-        if r["lv_start"] is not None and r["lv_end"] is not None and r["lv_end"] > r["lv_start"]:
-            lv = f" · lvl {r['lv_start']}→{r['lv_end']}"
-        lines.append(f"{mark} **{r['name']}**: {fmt_xp(r['gained'])} XP{lv}")
-    e.add_field(name="Leaderboard", value="\n".join(lines) or "Nobody has gained XP yet.", inline=False)
-    e.add_field(name="How XP is tracked", value=(
-        "Wise Old Man updates your XP when you log out with the RuneLite **Wise Old Man** plugin on, "
-        "or press **Update me** below."), inline=False)
-    e.set_footer(text=f"Data: Wise Old Man · refreshed {time.strftime('%H:%M', time.gmtime())} UTC")
-    return e
+    desc = (f"{state}\n\n"
+            f"Gain as much **{label} XP** as you can during the week. Most XP gained wins.\n"
+            "Your XP updates when you log out with the RuneLite **Wise Old Man** plugin on, "
+            "or press **Update me** below and type your name.\n\n")
+    if prizes:
+        desc += "**Prizes**: " + ", ".join(f"{place_name(i)} {p}" for i, p in enumerate(prizes)) + "\n"
+    desc += f"**{len(active)}** of {comp.get('participantCount', len(rows))} players gained XP \u00b7 clan total **{fmt_xp(total)} XP**"
+    head = discord.Embed(title=f"Skill of the Week: {label}", url=f"{SITE}/competitions/{comp['id']}",
+                         color=COLOR, description=desc)
+    if banner:
+        head.set_image(url=banner)
+    head.set_footer(text=f"Updated {datetime.now(TZ).strftime('%d %b %H:%M')} Amsterdam time \u00b7 data from Wise Old Man")
+
+    board = discord.Embed(title="Leaderboard", color=COLOR)
+    places = max(len(prizes), 3)
+    lines: list[str] = []
+    for i, r in enumerate(active[:25]):
+        if i == places and i > 0:
+            lines.append("")  # gap between the prize places and the rest
+        if i < 3:
+            mark = MEDALS[i]
+        elif i < len(prizes):
+            mark = "\U0001F3C5"
+        else:
+            mark = f"`{i + 1:>2}.`"
+        prize = f" \u00b7 {prizes[i]}" if i < len(prizes) else ""
+        lines.append(f"{mark} **{r['name']}**: **{fmt_xp(r['gained'])} XP**{prize}")
+        if i < places:
+            lv = (f"level {r['lv_start']} \u2192 {r['lv_end']}"
+                  if r["lv_start"] is not None and r["lv_end"] is not None and r["lv_end"] > r["lv_start"]
+                  else f"level {r['lv_end']}" if r["lv_end"] is not None else "")
+            lines.append(f"\u2003\u2514 {r['gained']:,} XP" + (f" \u00b7 {lv}" if lv else ""))
+    if len(active) > 25:
+        lines.append(f"and {len(active) - 25} more: press **Full leaderboard**")
+    board.description = "\n".join(lines)[:4096] or "Nobody has gained XP yet."
+    return [head, board]
 
 
 class RsnModal(discord.ui.Modal):
@@ -199,12 +229,21 @@ class SotwView(discord.ui.View):
 
 
 class SettingsModal(discord.ui.Modal, title="Skill of the Week"):
-    link = discord.ui.TextInput(label="Wise Old Man competition link or ID", placeholder="https://wiseoldman.net/competitions/161485")
+    def __init__(self, cid: int, label: str, prizes: str, banner: str) -> None:
+        super().__init__()
+        self.link = discord.ui.TextInput(label="Wise Old Man competition link or ID", default=f"{SITE}/competitions/{cid}")
+        self.label = discord.ui.TextInput(label="Skill name shown on the board", default=label, max_length=30)
+        self.prizes = discord.ui.TextInput(label="Prizes for 1st, 2nd, 3rd (commas, optional)", default=prizes or None,
+                                           required=False, max_length=100, placeholder="10M, 5M, 2.5M")
+        self.banner = discord.ui.TextInput(label="Banner image link (optional)", default=banner or None, required=False,
+                                           max_length=400)
+        for x in (self.link, self.label, self.prizes, self.banner):
+            self.add_item(x)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         m = re.search(r"(\d+)\s*/?\s*$", str(self.link.value).strip())
         if not m:
-            await interaction.response.send_message("I can't find a competition ID in that.", ephemeral=True)
+            await interaction.response.send_message("I can't find a competition ID in that link.", ephemeral=True)
             return
         cid = int(m.group(1))
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -213,7 +252,11 @@ class SettingsModal(discord.ui.Modal, title="Skill of the Week"):
         except Exception as e:
             await interaction.followup.send(f"Couldn't load competition {cid}: {e}", ephemeral=True)
             return
-        await interaction.client.store.set("sotw:competition", str(cid))
+        store = interaction.client.store
+        await store.set("sotw:competition", str(cid))
+        await store.set("sotw:label", str(self.label.value).strip() or DEFAULT_LABEL)
+        await store.set("sotw:prizes", ", ".join(p.strip() for p in str(self.prizes.value).split(",") if p.strip()))
+        await store.set("sotw:banner", str(self.banner.value).strip())
         await interaction.client.sotw_refresh(repost=True)
         await interaction.followup.send(f"Now tracking **{comp['title']}** ({comp['metric']}, {comp['participantCount']} players).",
                                         ephemeral=True)
@@ -223,10 +266,13 @@ class SotwPanel(discord.ui.View):
     def __init__(self) -> None:
         super().__init__(timeout=900)
 
-    @discord.ui.button(label="Change competition", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Competition, prizes and banner", style=discord.ButtonStyle.primary)
     async def change(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
         if await admin_only(interaction):
-            await interaction.response.send_modal(SettingsModal())
+            bot = interaction.client
+            await interaction.response.send_modal(SettingsModal(
+                await bot.sotw_competition_id(), await bot.sotw_setting("label", DEFAULT_LABEL),
+                await bot.sotw_setting("prizes", ""), await bot.sotw_setting("banner", DEFAULT_BANNER)))
 
     @discord.ui.button(label="Refresh now", style=discord.ButtonStyle.secondary)
     async def refresh(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
@@ -265,6 +311,10 @@ class SotwMixin:
         self.tree.add_command(sotw_settings_cmd)
         self.sotw_loop.start()
 
+    async def sotw_setting(self, key: str, default: str) -> str:
+        raw = await self.store.get(f"sotw:{key}")
+        return default if raw is None else raw
+
     async def sotw_competition_id(self) -> int:
         raw = await self.store.get("sotw:competition")
         return int(raw) if raw else DEFAULT_COMPETITION
@@ -274,7 +324,10 @@ class SotwMixin:
             cid = await self.sotw_competition_id()
             comp = await self.wom.competition(cid)
             ch = self.get_channel(SOTW_CHANNEL_ID) or await self.fetch_channel(SOTW_CHANNEL_ID)
-            embed, view = board_embed(comp), SotwView(cid)
+            embeds = board_embeds(comp, await self.sotw_setting("label", DEFAULT_LABEL),
+                                  [p.strip() for p in (await self.sotw_setting("prizes", "")).split(",") if p.strip()],
+                                  await self.sotw_setting("banner", DEFAULT_BANNER))
+            view = SotwView(cid)
             key = f"sotw:msg:{ch.id}"
             old = await self.store.get(key)
             if old:
@@ -283,11 +336,11 @@ class SotwMixin:
                     if repost:
                         await msg.delete()
                     else:
-                        await msg.edit(embed=embed, view=view)
+                        await msg.edit(embeds=embeds, view=view)
                         return
                 except discord.HTTPException:
                     pass
-            msg = await ch.send(embed=embed, view=view)
+            msg = await ch.send(embeds=embeds, view=view)
             await self.store.set(key, str(msg.id))
         except Exception:
             log.exception("Skill of the Week refresh failed")
