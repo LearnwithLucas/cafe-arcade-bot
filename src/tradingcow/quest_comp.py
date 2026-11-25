@@ -1420,10 +1420,32 @@ async def guide_embed(qc: QCStore) -> discord.Embed:
     return e
 
 
+class ArchivedView(discord.ui.View):
+    """Catches clicks on buttons of old quest competition messages."""
+    ARCHIVED_MSG = "The quest competition has ended and is archived. The final results are on the leaderboard above."
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        for cid in ("qc:log", "qc:mine", "qc:who", "qc:help", "qc:update", "qc:rules"):
+            btn = discord.ui.Button(label=cid, custom_id=cid)
+            btn.callback = self._reply
+            self.add_item(btn)
+
+    async def _reply(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(self.ARCHIVED_MSG, ephemeral=True)
+
+
 # ------------------------------------------------------------ bot mixin
 
 class QuestCompMixin:
     """Mixed into TradingCow. Needs self.store, self.get_channel and self.fetch_channel."""
+
+    async def qc_archive_setup(self) -> None:
+        """Quest competition archived: no commands, no loop. Data stays in the database, the admin list keeps
+        working for other features, and old buttons answer politely instead of failing."""
+        self.qc = QCStore(self.store)
+        await self.qc.setup()
+        self.add_view(ArchivedView())
 
     async def qc_setup(self) -> None:
         self.qc = QCStore(self.store)

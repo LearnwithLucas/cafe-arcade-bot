@@ -1,7 +1,7 @@
 """Skill of the Week for TradingCow, powered by Wise Old Man.
 
 The bot reads a Wise Old Man competition (https://wiseoldman.net/competitions/<id>) and keeps one live
-leaderboard message in the SOTW channel, refreshed every 10 minutes. Wise Old Man updates a player's XP when
+leaderboard message in the SOTW channel, refreshed every hour. Wise Old Man updates a player's XP when
 they log out with the RuneLite Wise Old Man plugin, or when someone presses "Update me" (the bot asks WOM to update).
 
 Admins pick the competition with /sotw_settings. No XP is stored here: Wise Old Man is the source of truth.
@@ -20,7 +20,7 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from .quest_comp import admin_only
+from .quest_comp import AdminsView, admin_only, admins_text
 
 log = logging.getLogger("tradingcow.sotw")
 
@@ -292,14 +292,72 @@ class SotwPanel(discord.ui.View):
         await interaction.followup.send("Board reposted at the bottom of the channel.", ephemeral=True)
 
 
-@app_commands.command(name="sotw_settings", description="Skill of the Week: pick the Wise Old Man competition (admins)")
+    @discord.ui.button(label="Channel", style=discord.ButtonStyle.secondary, row=1)
+    async def channel(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.send_message("Where should the Skill of the Week board go?",
+                                                    view=ChannelView(), ephemeral=True)
+
+    @discord.ui.button(label="Admins", style=discord.ButtonStyle.secondary, row=1)
+    async def admins(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.send_message(admins_text(), view=AdminsView(), ephemeral=True)
+
+    @discord.ui.button(label="Admin guide", style=discord.ButtonStyle.primary, row=1)
+    async def guide(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
+        if await admin_only(interaction):
+            await interaction.response.send_message(GUIDE, ephemeral=True)
+
+
+GUIDE = (
+    "**Skill of the Week: admin guide**\n"
+    "1. Create the competition on wiseoldman.net (skill, dates, players).\n"
+    "2. Here press **Competition, prizes and banner**: paste the link, set the skill name, prizes and banner.\n"
+    "3. The board updates itself every hour. **Refresh now** pulls the latest XP straight away, "
+    "**Repost board** moves it to the bottom of the channel.\n\n"
+    "XP comes from Wise Old Man. It updates when players log out with the RuneLite Wise Old Man plugin on, "
+    "or when they press **Update me** on the board. Players missing from the board aren't in the competition "
+    "on Wise Old Man yet: add them there.")
+
+
+class ChannelView(discord.ui.View):
+    def __init__(self) -> None:
+        super().__init__(timeout=900)
+        sel = discord.ui.ChannelSelect(placeholder="Channel", channel_types=[discord.ChannelType.text])
+        sel.callback = self.pick
+        self.sel = sel
+        self.add_item(sel)
+
+    async def pick(self, interaction: discord.Interaction) -> None:
+        if not await admin_only(interaction):
+            return
+        ch = self.sel.values[0]
+        await interaction.client.store.set("sotw:channel", str(ch.id))
+        await interaction.response.edit_message(content=f"The board now goes to {ch.mention}.", view=None)
+        await interaction.client.sotw_refresh()
+
+
+async def panel_text(bot) -> str:
+    cid = await bot.sotw_competition_id()
+    prizes = await bot.sotw_setting("prizes", "")
+    try:
+        comp = await bot.wom.competition(cid)
+        what = f"**{comp['title']}** ({comp['metric']}, {comp['participantCount']} players)"
+    except Exception:
+        what = "could not reach Wise Old Man right now"
+    return (f"**Skill of the Week settings**\n"
+            f"Competition: {what}\n{SITE}/competitions/{cid}\n"
+            f"Skill name on the board: {await bot.sotw_setting('label', DEFAULT_LABEL)}\n"
+            f"Prizes: {prizes or 'none set'}\n"
+            f"Channel: <#{await bot.sotw_channel_id()}> \u00b7 refreshes every hour")
+
+
+@app_commands.command(name="sotw_settings", description="Skill of the Week: competition, board and admins (admins)")
 async def sotw_settings_cmd(interaction: discord.Interaction) -> None:
     if not await admin_only(interaction):
         return
-    cid = await interaction.client.sotw_competition_id()
-    await interaction.response.send_message(
-        f"**Skill of the Week**\nTracking: {SITE}/competitions/{cid}\nChannel: <#{SOTW_CHANNEL_ID}>\n"
-        "The board refreshes every 10 minutes.", view=SotwPanel(), ephemeral=True)
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    await interaction.followup.send(await panel_text(interaction.client), view=SotwPanel(), ephemeral=True)
 
 
 class SotwMixin:
@@ -315,6 +373,10 @@ class SotwMixin:
         raw = await self.store.get(f"sotw:{key}")
         return default if raw is None else raw
 
+    async def sotw_channel_id(self) -> int:
+        raw = await self.store.get("sotw:channel")
+        return int(raw) if raw else SOTW_CHANNEL_ID
+
     async def sotw_competition_id(self) -> int:
         raw = await self.store.get("sotw:competition")
         return int(raw) if raw else DEFAULT_COMPETITION
@@ -323,7 +385,8 @@ class SotwMixin:
         try:
             cid = await self.sotw_competition_id()
             comp = await self.wom.competition(cid)
-            ch = self.get_channel(SOTW_CHANNEL_ID) or await self.fetch_channel(SOTW_CHANNEL_ID)
+            chid = await self.sotw_channel_id()
+            ch = self.get_channel(chid) or await self.fetch_channel(chid)
             embeds = board_embeds(comp, await self.sotw_setting("label", DEFAULT_LABEL),
                                   [p.strip() for p in (await self.sotw_setting("prizes", "")).split(",") if p.strip()],
                                   await self.sotw_setting("banner", DEFAULT_BANNER))
@@ -345,7 +408,7 @@ class SotwMixin:
         except Exception:
             log.exception("Skill of the Week refresh failed")
 
-    @tasks.loop(minutes=10)
+    @tasks.loop(hours=1)
     async def sotw_loop(self) -> None:
         await self.sotw_refresh()
 
