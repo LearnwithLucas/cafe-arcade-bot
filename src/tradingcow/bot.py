@@ -19,6 +19,7 @@ from discord.ext import commands, tasks
 
 from . import market
 from .quest_comp import QuestCompMixin
+from .sotw import SotwMixin
 from .quiz import setup_quiz
 from .bingo import setup_bingo
 from .store import Store
@@ -114,7 +115,7 @@ def parse_gp(text: str) -> int | None:
     return int(float(m.group(1)) * mult)
 
 
-class TradingCow(QuestCompMixin, commands.Bot):
+class TradingCow(QuestCompMixin, SotwMixin, commands.Bot):
     def __init__(self, db_path: Path, guild_ids: list[int], alert_channel_id: int | None, dump_min_drop: float) -> None:
         super().__init__(command_prefix="!tc-unused ", intents=discord.Intents.default(), help_command=None)
         self.store = Store(db_path)
@@ -141,7 +142,9 @@ class TradingCow(QuestCompMixin, commands.Bot):
             self.tree.add_command(cmd)
         await self.qc_setup()  # quest competition: /quest, /qp_settings and its loop
         setup_quiz(self)  # /osrsquiz
-        await setup_bingo(self)  # /bingo_submit, /bingo_settings
+        if os.getenv("BINGO_ENABLED", "0") == "1":  # bingo is parked; the test channel is used for SOTW now
+            await setup_bingo(self)  # /bingo_submit, /bingo_settings
+        await self.sotw_setup()  # Skill of the Week from Wise Old Man: /sotw_settings and its loop
         if self.guild_ids:
             for gid in self.guild_ids:
                 g = discord.Object(id=gid)
@@ -159,11 +162,12 @@ class TradingCow(QuestCompMixin, commands.Bot):
         self.backfill_task = asyncio.create_task(self.backfill())
 
     async def close(self) -> None:
-        for loop in (self.price_loop, self.hour_loop, self.dump_loop, self.board_loop, self.guide_loop, self.qc_loop):
+        for loop in (self.price_loop, self.hour_loop, self.dump_loop, self.board_loop, self.guide_loop, self.qc_loop, self.sotw_loop):
             loop.cancel()
         if self.backfill_task:
             self.backfill_task.cancel()
         await self.wiki.close()
+        await self.wom.close()
         await self.store.close()
         await super().close()
 
@@ -172,7 +176,8 @@ class TradingCow(QuestCompMixin, commands.Bot):
         if not getattr(self, "_pinged", False):  # on_ready can fire again after a reconnect
             self._pinged = True
             asyncio.create_task(self.ping_test_channel())
-            asyncio.create_task(self.bingo_refresh())
+            if hasattr(self, "bingo_refresh"):
+                asyncio.create_task(self.bingo_refresh())
 
     async def ping_test_channel(self) -> None:
         """Test channel: post 'Ping' and edit it to 'Pong' once per start, to check the bot can post there."""
