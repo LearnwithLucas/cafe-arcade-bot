@@ -183,16 +183,16 @@ class TradingCow(QuestCompMixin, SotwMixin, commands.Bot):
                 asyncio.create_task(self.bingo_refresh())
 
     async def ping_test_channel(self) -> None:
-        """Test channel: post 'Ping' and edit it to 'Pong' once per start, to check the bot can post there."""
-        cid = int(os.getenv("TEST_CHANNEL_ID", "1571254714836983848"))
+        """Private start-up check: DM the bot's owner (from the Discord developer portal) instead of posting
+        in a channel. If the DM can't be sent, it only goes to the log."""
+        start = time.monotonic()
         try:
-            ch = self.get_channel(cid) or await self.fetch_channel(cid)
-            start = time.monotonic()
-            msg = await ch.send("\U0001F3D3 Ping!")
+            app = await self.application_info()
+            owner = app.team.owner if app.team and app.team.owner else app.owner
             ms = int((time.monotonic() - start) * 1000)
-            await msg.edit(content=f"\U0001F3D3 Pong! TradingCow is online and can post here ({ms} ms).")
-        except Exception as e:  # never let the test break anything else
-            log.warning("Test channel %s: could not ping (%s)", cid, e)
+            await owner.send(f"\U0001F3D3 Pong! TradingCow restarted and is online ({ms} ms).")
+        except Exception as e:  # never let the check break anything else
+            log.info("Start-up ping: could not DM the owner (%s)", e)
 
     # ------------------------------------------------------------ data
     async def refresh_prices(self, force: bool = False) -> None:
