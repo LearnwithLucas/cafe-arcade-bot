@@ -44,47 +44,40 @@ TZ = ZoneInfo("Europe/Amsterdam")
 
 
 def guide_text(kind: str, dump_pct: int) -> tuple[str, str]:
-    """Title and text of the daily explainer for one channel kind."""
+    """Title and text of the 'how to read' card under each board."""
     cash = n(BOARD_CASH / 1e6)
     profit = n(BOARD_MIN_PROFIT / 1e3)
+    flips = ("Buy at the first price, sell at the second. Profit is after the 2% GE tax.\n"
+             "**Fill**: about how long buying and selling take at that size. **gp/h**: profit per hour of waiting.\n"
+             "**Risk**: low or medium, based on how steady the price and volume are.\n"
+             "Click an item name for its price chart.\n\n")
     return {
-        "dumps": ("About this channel: sudden dumps",
-                  f"TradingCow posts here when an item suddenly trades at least {dump_pct}% under its 7-day average, "
-                  "while it was still normal 24 hours ago.\n\n"
-                  "**How to read a post**\n"
-                  "Now vs 7-day avg: how far the price fell.\n"
-                  "Last hour and sell volume: how fast it is falling and how many people are selling.\n"
-                  "Back to average: what you make per item, after the 2% GE tax, if the price recovers.\n"
-                  "Limit: the GE buy limit every 4 hours.\n\n"
-                  "A dump can keep falling (game update, bot ban wave, item change). Check the news and the chart before you buy. "
-                  "Each item posts at most once a day. Use /dumps for the full weekly list."),
-        "f2p": ("About this channel: F2P flips",
-                f"The live board above shows the best free-to-play flips for one GE slot and up to {cash}m, "
-                f"each making at least {profit}k and likely to fill within about 6 hours. It refreshes every 10 minutes.\n\n"
-                "**How to read a flip**\n"
-                "Buy at the first price, sell at the second. Profit is after the 2% GE tax.\n"
-                "Fill: about how long buying and selling take at that size.\n"
-                "Risk: low, medium or high, based on how steady the price and volume are.\n\n"
-                "Use /flips here with your own cash, free slots and patience. It defaults to F2P items in this channel."),
-        "p2p": ("About this channel: members flips",
-                f"The live board above shows the best members-only flips for one GE slot and up to {cash}m, "
-                f"each making at least {profit}k and likely to fill within about 6 hours. It refreshes every 10 minutes.\n\n"
-                "**How to read a flip**\n"
-                "Buy at the first price, sell at the second. Profit is after the 2% GE tax.\n"
-                "Fill: about how long buying and selling take at that size.\n"
-                "Risk: low, medium or high, based on how steady the price and volume are.\n\n"
-                "Use /flips here with your own cash, free slots and patience. It defaults to members items in this channel."),
-        "general": ("About TradingCow",
-                    "TradingCow tracks Grand Exchange prices from the OSRS Wiki and never touches your account.\n\n"
-                    "**Commands**\n"
-                    "/price item: live prices, margin after tax and the 7-day average.\n"
-                    "/flips cash: the best flips for your cash, slots and patience.\n"
-                    "/alch: the best items to high alch right now.\n"
-                    "/dumps: items well under their weekly average.\n"
-                    "/skill skill: the 10 most profitable things to do in a skill right now.\n"
-                    "/watch add: get pinged here when an item crosses your price.\n\n"
-                    "Sudden dumps, F2P flips and members flips each have their own channel."),
+        "dumps": ("How to read this channel",
+                  f"The board above lists items trading at least {dump_pct}% under their 7-day average right now, "
+                  "with the most upside first. It updates every 15 minutes.\n"
+                  f"Separate **Sudden dump** alerts appear below when an item drops {dump_pct}%+ while it was still normal "
+                  "24 hours ago (each item at most once a day).\n\n"
+                  "**Back to average**: what you make per item, after tax, if the price recovers.\n"
+                  "A dump can keep falling (game update, ban wave, item change). Check the news and the chart before you buy. "
+                  "Use /dumps for the full weekly list."),
+        "f2p": ("How to read this board",
+                f"The best free-to-play flips for one GE slot and up to {cash}m, each making at least {profit}k "
+                "and likely to fill within about 6 hours. Updates every 10 minutes, reposted here every morning.\n\n"
+                + flips + "Use /flips with your own cash, free slots and patience."),
+        "p2p": ("How to read this board",
+                f"The best members-only flips for one GE slot and up to {cash}m, each making at least {profit}k "
+                "and likely to fill within about 6 hours. Updates every 10 minutes, reposted here every morning.\n\n"
+                + flips + "Use /flips with your own cash, free slots and patience."),
     }[kind]
+
+
+def short_gp(v: float) -> str:
+    v = float(v)
+    if abs(v) >= 1e6:
+        return f"{v / 1e6:.2f}M"
+    if abs(v) >= 1e4:
+        return f"{v / 1e3:.0f}K"
+    return f"{round(v):,}"
 
 
 def n(v) -> str:
@@ -253,18 +246,21 @@ class TradingCow(QuestCompMixin, SotwMixin, commands.Bot):
                 return
             history = await self.store.history(int(time.time()) - 8 * 24 * HOUR)
             dumps = market.find_dumps(self.mapping, self.latest, history, min_drop=self.dump_min_drop)
+            board = sorted((d for d in dumps if d.upside_each > 0), key=lambda d: d.upside_each * min(d.limit or 1, 1000),
+                           reverse=True)
+            await self.live_message("dumps", channel, dumps_board_embed(board, self.dump_min_drop))
             for d in dumps:
                 if not d.sudden or d.upside_each <= 0:
                     continue
                 if not await self.store.once(f"dump:{d.item_id}", 24 * HOUR):
                     continue
-                await channel.send(embed=dump_embed([d], "Sudden dump"))
+                await channel.send(embed=dump_embed([d], "\u26A1 Sudden dump"))
         except Exception:
             log.exception("TradingCow dump scan failed")
 
     @tasks.loop(minutes=10)
     async def board_loop(self) -> None:
-        """Keep one live flip board per channel: the message is edited, not reposted."""
+        """Keep one live board per channel: edited every 10 minutes, reposted at the bottom once a day."""
         for kind in ("f2p", "p2p"):
             try:
                 channel = await self.channel(kind)
@@ -272,63 +268,86 @@ class TradingCow(QuestCompMixin, SotwMixin, commands.Bot):
                     continue
                 rows = market.flips(self.mapping, self.latest, self.h1, self.d1, cash=BOARD_CASH, slots=1, max_hours=6,
                                     min_profit=BOARD_MIN_PROFIT, f2p=kind == "f2p", max_risk="medium",
-                                    members_only=kind == "p2p")[:12]
-                embed = flips_embed(rows, f"{'F2P' if kind == 'f2p' else 'Members'} flips, live board",
-                                    f"Best patient flips for one GE slot and up to {n(BOARD_CASH / 1e6)}m, filled within about 6h. "
-                                    f"Updated <t:{int(time.time())}:R>. Use /flips for your own cash and slots.")
-                key = f"board:{kind}:{channel.id}"
-                msg_id = await self.store.get(key)
-                msg = None
-                if msg_id:
-                    try:
-                        msg = await channel.fetch_message(int(msg_id))
-                    except discord.HTTPException:
-                        msg = None
-                if msg:
-                    await msg.edit(embed=embed)
-                else:
-                    msg = await channel.send(embed=embed)
-                    await self.store.set(key, str(msg.id))
+                                    members_only=kind == "p2p")[:10]
+                await self.live_message(kind, channel, flips_board_embed(rows, kind))
             except Exception:
                 log.exception("TradingCow %s board update failed", kind)
 
-    @tasks.loop(minutes=15)
+    async def live_message(self, kind: str, channel, board: discord.Embed, force_repost: bool = False) -> None:
+        """One message per channel: the board plus its 'how to read' card.
+        Edited in place, and once a day (at GUIDE_HOUR, Amsterdam) deleted and posted again at the bottom."""
+        title, text = guide_text(kind, round(self.dump_min_drop * 100))
+        embeds = [board, discord.Embed(title=title, description=text, color=0x2B2D31)]
+        key = f"live:{kind}:{channel.id}"
+        day_key = f"live:{kind}:day"
+        today = datetime.now(TZ).strftime("%Y-%m-%d")
+        repost = force_repost or (datetime.now(TZ).hour >= GUIDE_HOUR and await self.store.get(day_key) != today)
+        msg = None
+        old = await self.store.get(key)
+        if old:
+            try:
+                msg = await channel.fetch_message(int(old))
+            except discord.HTTPException:
+                msg = None
+        if msg and not repost:
+            await msg.edit(embeds=embeds)
+            return
+        if msg:
+            try:
+                await msg.delete()
+            except discord.HTTPException:
+                pass
+        for legacy in (f"board:{kind}:{channel.id}", f"guide:msg:{channel.id}"):  # messages from the old layout
+            lid = await self.store.get(legacy)
+            if lid:
+                try:
+                    await (await channel.fetch_message(int(lid))).delete()
+                except discord.HTTPException:
+                    pass
+                await self.store.set(legacy, "")
+        msg = await channel.send(embeds=embeds)
+        await self.store.set(key, str(msg.id))
+        if datetime.now(TZ).hour >= GUIDE_HOUR:
+            await self.store.set(day_key, today)
+
+    @tasks.loop(hours=6)
     async def guide_loop(self) -> None:
-        """Once a day (and right away if a channel has none yet), repost the explainer at the bottom of each channel."""
-        now = datetime.now(TZ)
-        last = float(await self.store.get("guide:last", "0") or 0)
-        first_run = not await self.store.get("guide:posted")
-        if first_run or (now.hour == GUIDE_HOUR and time.time() - last > 20 * HOUR):
-            await self.post_guides()
+        """The separate explainers are gone (they now sit under each board). Clean up the old 'About TradingCow'."""
+        if await self.store.get("guide:general_removed"):
+            return
+        ch = await self.channel("general")
+        old = await self.store.get(f"guide:msg:{ch.id}") if ch else None
+        if ch and old:
+            try:
+                await (await ch.fetch_message(int(old))).delete()
+            except discord.HTTPException:
+                pass
+            await self.store.set(f"guide:msg:{ch.id}", "")
+        await self.store.set("guide:general_removed", "1")
 
     async def post_guides(self) -> int:
-        """Delete yesterday's explainer and post a fresh one, so it sits at the bottom. Returns the channels done."""
-        by_channel: dict[int, tuple] = {}
-        for kind in ("dumps", "f2p", "p2p", "general"):
-            ch = await self.channel(kind)
-            if ch:
-                by_channel.setdefault(ch.id, (ch, []))[1].append(kind)
+        """Repost every board (with its explainer) at the bottom of its channel now."""
         done = 0
-        for cid, (ch, kinds) in by_channel.items():
+        for kind in ("dumps", "f2p", "p2p"):
+            ch = await self.channel(kind)
+            if not ch:
+                continue
             try:
-                old = await self.store.get(f"guide:msg:{cid}")
-                if old:
-                    try:
-                        await (await ch.fetch_message(int(old))).delete()
-                    except discord.HTTPException:
-                        pass
-                embeds = []
-                for kind in kinds:
-                    title, text = guide_text(kind, round(self.dump_min_drop * 100))
-                    embeds.append(discord.Embed(title=title, description=text, color=COLOR))
-                embeds[-1].set_footer(text="This explainer is reposted once a day.")
-                msg = await ch.send(embeds=embeds)
-                await self.store.set(f"guide:msg:{cid}", str(msg.id))
+                if kind == "dumps":
+                    history = await self.store.history(int(time.time()) - 8 * 24 * HOUR)
+                    dumps = market.find_dumps(self.mapping, self.latest, history, min_drop=self.dump_min_drop)
+                    board = dumps_board_embed(sorted((d for d in dumps if d.upside_each > 0),
+                                                     key=lambda d: d.upside_each * min(d.limit or 1, 1000), reverse=True),
+                                              self.dump_min_drop)
+                else:
+                    rows = market.flips(self.mapping, self.latest, self.h1, self.d1, cash=BOARD_CASH, slots=1, max_hours=6,
+                                        min_profit=BOARD_MIN_PROFIT, f2p=kind == "f2p", max_risk="medium",
+                                        members_only=kind == "p2p")[:10]
+                    board = flips_board_embed(rows, kind)
+                await self.live_message(kind, ch, board, force_repost=True)
                 done += 1
             except Exception:
-                log.exception("TradingCow guide post failed in %s", cid)
-        await self.store.set("guide:last", str(time.time()))
-        await self.store.set("guide:posted", "1")
+                log.exception("TradingCow repost failed for %s", kind)
         return done
 
     @price_loop.before_loop
@@ -429,6 +448,41 @@ def flips_embed(rows: list[market.Flip], title: str, description: str | None = N
         e.add_field(name=f"{f.name}: {signed(f.profit)}",
                     value=f"Buy {n(f.qty)} at {n(f.q.p_buy)}, sell at {n(f.q.p_sell)} ({signed(f.q.net)} each). "
                           f"Fill about {hrs(f.hours)}. Risk {f.q.risk}{flags}.", inline=False)
+    return e
+
+
+PRICE_PAGE = "https://prices.runescape.wiki/osrs/item/"
+F2P_ICON, P2P_ICON, DUMP_ICON = "\U0001F193", "\U0001F451", "\U0001F4C9"
+
+
+def flips_board_embed(rows: list[market.Flip], kind: str) -> discord.Embed:
+    icon, label = (F2P_ICON, "F2P flips") if kind == "f2p" else (P2P_ICON, "Members flips")
+    e = discord.Embed(title=f"{icon} {label}: today's board", color=COLOR)
+    lines = [f"Up to {n(BOARD_CASH / 1e6)}m in one slot, filled within ~6h \u00b7 updated <t:{int(time.time())}:R>", ""]
+    for i, f in enumerate(rows, 1):
+        per_h = f.profit / max(f.hours, 0.25)
+        roi = f.q.net / f.q.p_buy * 100 if f.q.p_buy else 0
+        lines.append(f"**{i}. [{f.name}]({PRICE_PAGE}{f.item_id})**: **+{short_gp(f.profit)}** \u00b7 {short_gp(per_h)} gp/h \u00b7 {f.q.risk} risk")
+        lines.append(f"\u2003Buy {n(f.qty)} at {n(f.q.p_buy)} \u2192 sell at {n(f.q.p_sell)} "
+                     f"(+{n(f.q.net)} each, {roi:.1f}%) \u00b7 fill ~{hrs(f.hours)}")
+    if not rows:
+        lines.append("Nothing passes the filters right now. Check back in a bit.")
+    e.description = "\n".join(lines)[:4096]
+    return e
+
+
+def dumps_board_embed(dumps: list[market.Dump], min_drop: float) -> discord.Embed:
+    e = discord.Embed(title=f"{DUMP_ICON} Dumped items: today's board", color=0xE66767)
+    lines = [f"Trading {round(min_drop * 100)}%+ under their 7-day average \u00b7 updated <t:{int(time.time())}:R>", ""]
+    for i, d in enumerate(dumps[:10], 1):
+        kind = "\u26A1 sudden" if d.sudden else "slow slide"
+        lines.append(f"**{i}. [{d.name}]({PRICE_PAGE}{d.item_id})**: **-{d.drop_pct:.0f}%** \u00b7 {kind}")
+        lines.append(f"\u2003Now {n(d.cur_low)} vs avg {n(d.base_low)} \u00b7 back to average **+{short_gp(d.upside_each)} each** "
+                     f"({d.upside_pct:.0f}%) \u00b7 limit {n(d.limit) if d.limit else '?'} \u00b7 ~{n(d.daily_gp_volume / 1e6)}m gp/day")
+    if not dumps:
+        lines.append("No big dumps right now. Quiet market.")
+    e.description = "\n".join(lines)[:4096]
+    e.set_footer(text="A dump can keep falling. Check the news and the chart before buying.")
     return e
 
 
@@ -697,14 +751,14 @@ async def channels_cmd(interaction: discord.Interaction) -> None:
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
-@app_commands.command(name="tc_guide", description="Repost the explainer in every TradingCow channel now")
+@app_commands.command(name="tc_guide", description="Repost the F2P, members and dumps boards at the bottom of their channels")
 async def guide_cmd(interaction: discord.Interaction) -> None:
     if not can_configure(interaction):
         await interaction.response.send_message("Only TradingCow admins can do this.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
     done = await bot_of(interaction).post_guides()
-    await interaction.followup.send(f"Reposted the explainer in {done} channel(s). It also reposts by itself every day at {GUIDE_HOUR}:00.",
+    await interaction.followup.send(f"Reposted {done} board(s). They also repost by themselves every day at {GUIDE_HOUR}:00.",
                                     ephemeral=True)
 
 
@@ -718,7 +772,7 @@ async def help_cmd(interaction: discord.Interaction) -> None:
         "/skill skill: top 10 most profitable methods right now (level optional)\n"
         "/watch add, list, remove: price alerts (posted in the general channel)\n"
         "/tc_channel, /tc_channels: where automatic posts go\n"
-        "/tc_guide: repost the channel explainers now\n"
+        "/tc_guide: repost the flip and dump boards at the bottom of their channels\n"
         "/osrsquiz: start an OSRS quiz (multiple choice, 25 seconds per question)\n"
         "/sotw_settings: Skill of the Week board, competition and admins (admins)\n\n"
         "Prices come from the OSRS Wiki. The bot never touches your account."))
