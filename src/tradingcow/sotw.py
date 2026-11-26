@@ -33,10 +33,21 @@ DEFAULT_COMPETITION = int(os.getenv("SOTW_COMPETITION_ID", "161485"))
 COLOR = 0x2E8B57
 TZ = ZoneInfo("Europe/Amsterdam")
 DEFAULT_LABEL = os.getenv("SOTW_LABEL", "Thieving")
-PRIZE_PLACES = int(os.getenv("SOTW_PRIZE_PLACES", "5"))  # top 5 win something, even before amounts are set
+PRIZE_PLACES = int(os.getenv("SOTW_PRIZE_PLACES", "0"))  # 0 = as many places as there are prizes
+DEFAULT_PRIZES = os.getenv("SOTW_PRIZES", "20M, 15M, 10M, 5M")
+GROUP_ID = int(os.getenv("SOTW_GROUP_ID", "23796"))  # the clan's Wise Old Man group
+# Shown until the competition exists on Wise Old Man (Amsterdam time).
+EVENT_START = os.getenv("SOTW_START", "2026-11-27 23:00")
+EVENT_END = os.getenv("SOTW_END", "2026-12-04 23:00")
+DEFAULT_INTRO = os.getenv("SOTW_INTRO", "*Forget the grind, embrace the crime. It's Thieving week!* \U0001F4B0\U0001F440")
+DEFAULT_EXTRA = os.getenv("SOTW_EXTRA", (
+    "\U0001F3C5 **5M** to the first person to get the Thieving pet **Rocky** "
+    "(screenshot of the clan chat announcement required)\n"
+    "\U0001F389 The winner gets a special rank until the next SOTW or BOTW winner"))
 DEFAULT_BANNER = os.getenv("SOTW_BANNER",
                            "https://learnwithlucas.com/wp-content/uploads/2026/11/Twilight-Thieving-Skill-Showcase.jpg")
-MEDALS = ["\U0001F947", "\U0001F948", "\U0001F949"]
+MEDALS = ["\U0001F947", "\U0001F948", "\U0001F949", "\U0001F396\uFE0F"]
+SPORT_MEDAL = "\U0001F3C5"
 SKILL_EMOJI = {
     "thieving": "\U0001F977", "agility": "\U0001F3C3", "woodcutting": "\U0001FA93", "fishing": "\U0001F3A3",
     "mining": "⛏️", "cooking": "\U0001F373", "firemaking": "\U0001F525", "farming": "\U0001F33E",
@@ -84,6 +95,18 @@ class WOM:
         self.cache[cid] = (time.time(), data)
         return data
 
+    async def group_competitions(self, group_id: int, max_age: float = 600) -> list[dict]:
+        hit = self.cache.get(-group_id)
+        if hit and time.time() - hit[0] < max_age:
+            return hit[1]
+        s = await self._s()
+        async with s.get(f"{API}/groups/{group_id}/competitions", params={"limit": 20}) as r:
+            data = await r.json(content_type=None)
+            if r.status != 200:
+                raise RuntimeError(f"Wise Old Man {r.status}")
+        self.cache[-group_id] = (time.time(), data)
+        return data
+
     async def update_player(self, username: str) -> tuple[bool, str]:
         s = await self._s()
         async with s.post(f"{API}/players/{username}") as r:
@@ -115,10 +138,20 @@ def place_name(i: int) -> str:
     return f"{n}{suffix}"
 
 
-def board_embeds(comp: dict, label: str, prizes: list[str], banner: str,
-                 prev_ranks: dict[str, int] | None = None) -> list[discord.Embed]:
-    """Same layout as the quest competition: a header card with rules, prizes and banner, then the leaderboard."""
-    start, end, now = ts(comp["startsAt"]), ts(comp["endsAt"]), time.time()
+def local_ts(text: str) -> int:
+    return int(datetime.strptime(text.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=TZ).timestamp())
+
+
+def board_embeds(comp: dict | None, label: str, prizes: list[str], banner: str,
+                 prev_ranks: dict[str, int] | None = None, intro: str = "", extra: str = "") -> list[discord.Embed]:
+    """Same layout as the quest competition: a header card with rules, prizes and banner, then the leaderboard.
+    comp is None while the competition isn't on Wise Old Man yet: the board then shows the announced dates."""
+    if comp is None:
+        comp = {"id": None, "startsAt": None, "endsAt": None, "participations": [], "participantCount": 0}
+        start, end = local_ts(EVENT_START), local_ts(EVENT_END)
+    else:
+        start, end = ts(comp["startsAt"]), ts(comp["endsAt"])
+    now = time.time()
     if now < start:
         state = f"Starts <t:{start}:f> (<t:{start}:R>). Ends <t:{end}:f>."
     elif now < end:
@@ -128,28 +161,32 @@ def board_embeds(comp: dict, label: str, prizes: list[str], banner: str,
     rows = standings(comp)
     active = [r for r in rows if r["gained"] > 0]
     total = sum(r["gained"] for r in rows)
-    desc = (f"{state}\n\n"
+    desc = (f"{intro}\n\n" if intro else "") + (f"{state}\n\n"
             f"Gain as much **{label} XP** as you can during the week. Most XP gained wins.\n"
             "Your XP updates when you log out with the RuneLite **Wise Old Man** plugin on, "
             "or press **Update me** below and type your name.\n\n")
     if prizes:
-        desc += "**Prizes**: " + ", ".join(f"{place_name(i)} {p}" for i, p in enumerate(prizes)) + "\n"
-    desc += f"**{len(active)}** of {comp.get('participantCount', len(rows))} players gained XP \u00b7 clan total **{fmt_xp(total)} XP**"
-    head = discord.Embed(title=f"Skill of the Week: {label}", url=f"{SITE}/competitions/{comp['id']}",
-                         color=COLOR, description=desc)
+        desc += (f"\U0001F3C6 **{len(prizes)} winning places** (most XP by the end of the week)\n"
+                 + "  ".join(f"{MEDALS[i] if i < len(MEDALS) else SPORT_MEDAL} {p}" for i, p in enumerate(prizes)) + "\n")
+    if extra:
+        desc += extra.strip() + "\n"
+    if comp["id"]:
+        desc += f"\n**{len(active)}** of {comp.get('participantCount', len(rows))} players gained XP \u00b7 clan total **{fmt_xp(total)} XP**"
+    head = discord.Embed(title=f"Skill of the Week: {label}", url=f"{SITE}/competitions/{comp['id']}" if comp["id"] else None,
+                         color=COLOR, description=desc[:4096])
     if banner:
         head.set_image(url=banner)
     head.set_footer(text=f"Updated {datetime.now(TZ).strftime('%d %b %H:%M')} Amsterdam time \u00b7 data from Wise Old Man")
 
     board = discord.Embed(title="Leaderboard", color=COLOR)
-    places = max(len(prizes), PRIZE_PLACES)
+    places = max(PRIZE_PLACES or len(prizes), 1)
     cutoff = active[places - 1]["gained"] if len(active) >= places else 0
     prev = prev_ranks or {}
     lines: list[str] = []
     for i, r in enumerate(active[:25]):
         if i == places:
             lines.append(f"\u2500\u2500\u2500 \U0001F3C6 prize line: {place_name(places - 1)} has {fmt_xp(cutoff)} XP \u2500\u2500\u2500")
-        mark = MEDALS[i] if i < 3 else "\U0001F3C5" if i < places else f"`{i + 1:>2}.`"
+        mark = (MEDALS[i] if i < len(MEDALS) else SPORT_MEDAL) if i < places else f"`{i + 1:>2}.`"
         was = prev.get(r["username"])
         move = ""
         if was is not None and was != i + 1:
@@ -175,6 +212,9 @@ def board_embeds(comp: dict, label: str, prizes: list[str], banner: str,
         lines.append(f"and {len(active) - 25} more: press **Full leaderboard**")
     if prev:
         lines += ["", "*\u2B06\uFE0F\u2B07\uFE0F places moved since the last update \u00b7 \U0001F195 new on the board*"]
+    if not comp["id"]:
+        lines = ["The leaderboard appears here as soon as the competition is live on Wise Old Man.",
+                 "Make sure the RuneLite **Wise Old Man** plugin is on, so your XP is tracked from the first minute."]
     board.description = "\n".join(lines)[:4096] or "Nobody has gained XP yet."
     return [head, board]
 
@@ -245,7 +285,7 @@ class SotwView(discord.ui.View):
 
 
 class SettingsModal(discord.ui.Modal, title="Skill of the Week"):
-    def __init__(self, cid: int, label: str, prizes: str, banner: str) -> None:
+    def __init__(self, cid: int, label: str, prizes: str, banner: str, extra: str = "") -> None:
         super().__init__()
         self.link = discord.ui.TextInput(label="Wise Old Man competition link or ID", default=f"{SITE}/competitions/{cid}")
         self.label = discord.ui.TextInput(label="Skill name shown on the board", default=label, max_length=30)
@@ -253,7 +293,9 @@ class SettingsModal(discord.ui.Modal, title="Skill of the Week"):
                                            required=False, max_length=100, placeholder="10M, 5M, 2.5M")
         self.banner = discord.ui.TextInput(label="Banner image link (optional)", default=banner or None, required=False,
                                            max_length=400)
-        for x in (self.link, self.label, self.prizes, self.banner):
+        self.extra = discord.ui.TextInput(label="Bonus prizes and extra info (optional)", default=extra or None,
+                                          required=False, max_length=600, style=discord.TextStyle.paragraph)
+        for x in (self.link, self.label, self.prizes, self.banner, self.extra):
             self.add_item(x)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -273,6 +315,7 @@ class SettingsModal(discord.ui.Modal, title="Skill of the Week"):
         await store.set("sotw:label", str(self.label.value).strip() or DEFAULT_LABEL)
         await store.set("sotw:prizes", ", ".join(p.strip() for p in str(self.prizes.value).split(",") if p.strip()))
         await store.set("sotw:banner", str(self.banner.value).strip())
+        await store.set("sotw:extra", str(self.extra.value).strip())
         await interaction.client.sotw_refresh(repost=True)
         await interaction.followup.send(f"Now tracking **{comp['title']}** ({comp['metric']}, {comp['participantCount']} players).",
                                         ephemeral=True)
@@ -288,7 +331,8 @@ class SotwPanel(discord.ui.View):
             bot = interaction.client
             await interaction.response.send_modal(SettingsModal(
                 await bot.sotw_competition_id(), await bot.sotw_setting("label", DEFAULT_LABEL),
-                await bot.sotw_setting("prizes", ""), await bot.sotw_setting("banner", DEFAULT_BANNER)))
+                (await bot.sotw_setting("prizes", "")) or DEFAULT_PRIZES, await bot.sotw_setting("banner", DEFAULT_BANNER),
+                await bot.sotw_setting("extra", DEFAULT_EXTRA)))
 
     @discord.ui.button(label="Refresh now", style=discord.ButtonStyle.secondary)
     async def refresh(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
@@ -354,17 +398,19 @@ class ChannelView(discord.ui.View):
 
 
 async def panel_text(bot) -> str:
-    cid = await bot.sotw_competition_id()
-    prizes = await bot.sotw_setting("prizes", "")
+    prizes = (await bot.sotw_setting("prizes", "")) or DEFAULT_PRIZES
+    label = await bot.sotw_setting("label", DEFAULT_LABEL)
     try:
-        comp = await bot.wom.competition(cid)
-        what = f"**{comp['title']}** ({comp['metric']}, {comp['participantCount']} players)"
+        comp = await bot.sotw_pick()
+        what = (f"**{comp['title']}** ({comp['metric']}, {comp['participantCount']} players)\n{SITE}/competitions/{comp['id']}"
+                if comp else f"no {label} competition on Wise Old Man yet. The board shows the announced dates "
+                             f"({EVENT_START} to {EVENT_END}) and switches over by itself once it's created in the clan group.")
     except Exception:
         what = "could not reach Wise Old Man right now"
     return (f"**Skill of the Week settings**\n"
-            f"Competition: {what}\n{SITE}/competitions/{cid}\n"
-            f"Skill name on the board: {await bot.sotw_setting('label', DEFAULT_LABEL)}\n"
-            f"Prizes: {prizes or 'none set'}\n"
+            f"Competition: {what}\n"
+            f"Skill name on the board: {label}\n"
+            f"Prizes: {prizes}\n"
             f"Channel: <#{await bot.sotw_channel_id()}> \u00b7 refreshes every hour")
 
 
@@ -397,10 +443,28 @@ class SotwMixin:
         raw = await self.store.get("sotw:competition")
         return int(raw) if raw else DEFAULT_COMPETITION
 
+    async def sotw_pick(self) -> dict | None:
+        """The competition to show: the newest one in the clan's Wise Old Man group for this skill.
+        Falls back to the one set in /sotw_settings. None means 'not on Wise Old Man yet'."""
+        label = (await self.sotw_setting("label", DEFAULT_LABEL)).strip().lower()
+        cid = await self.sotw_competition_id()
+        try:
+            group = [c for c in await self.wom.group_competitions(GROUP_ID) if c.get("metric") == label]
+        except Exception:
+            log.warning("Skill of the Week: couldn't read the Wise Old Man group, using the set competition")
+            group = []
+        if group:
+            newest = max(group, key=lambda c: c["startsAt"])
+            if newest["id"] != cid:
+                await self.store.set("sotw:competition", str(newest["id"]))
+                cid = newest["id"]
+        comp = await self.wom.competition(cid)
+        return comp if comp.get("metric") == label else None
+
     async def sotw_refresh(self, repost: bool = False) -> None:
         try:
-            cid = await self.sotw_competition_id()
-            comp = await self.wom.competition(cid)
+            comp = await self.sotw_pick()
+            cid = comp["id"] if comp else await self.sotw_competition_id()
             chid = await self.sotw_channel_id()
             ch = self.get_channel(chid) or await self.fetch_channel(chid)
             rank_key = f"sotw:ranks:{cid}"
@@ -408,13 +472,14 @@ class SotwMixin:
                 prev = json.loads(await self.store.get(rank_key) or "{}")
             except ValueError:
                 prev = {}
-            embeds = board_embeds(comp, await self.sotw_setting("label", DEFAULT_LABEL),
-                                  [p.strip() for p in (await self.sotw_setting("prizes", "")).split(",") if p.strip()],
-                                  await self.sotw_setting("banner", DEFAULT_BANNER), prev)
-            now_ranks = {r["username"]: i + 1 for i, r in enumerate(x for x in standings(comp) if x["gained"] > 0)}
+            prizes = [p.strip() for p in ((await self.sotw_setting("prizes", "")) or DEFAULT_PRIZES).split(",") if p.strip()]
+            embeds = board_embeds(comp, await self.sotw_setting("label", DEFAULT_LABEL), prizes,
+                                  await self.sotw_setting("banner", DEFAULT_BANNER), prev,
+                                  intro=DEFAULT_INTRO, extra=await self.sotw_setting("extra", DEFAULT_EXTRA))
+            now_ranks = {r["username"]: i + 1 for i, r in enumerate(x for x in standings(comp) if x["gained"] > 0)} if comp else {}
             if now_ranks != prev:
                 await self.store.set(rank_key, json.dumps(now_ranks))
-            view = SotwView(cid)
+            view = SotwView(cid if comp else None)
             key = f"sotw:msg:{ch.id}"
             old = await self.store.get(key)
             if old:
