@@ -28,7 +28,8 @@ log = logging.getLogger("tradingcow.sotw")
 API = "https://api.wiseoldman.net/v2"
 SITE = "https://wiseoldman.net"
 USER_AGENT = "TradingCow Discord bot (github.com/LearnwithLucas/cafe-arcade-bot)"
-SOTW_CHANNEL_ID = int(os.getenv("SOTW_CHANNEL_ID", "1571254714836983848"))
+SOTW_CHANNEL_ID = int(os.getenv("SOTW_CHANNEL_ID", "1560197183670853682"))  # the clan's skill-of-the-week channel
+OLD_TEST_CHANNEL = 1571254714836983848
 DEFAULT_COMPETITION = int(os.getenv("SOTW_COMPETITION_ID", "167657"))
 COLOR = 0x2E8B57
 TZ = ZoneInfo("Europe/Amsterdam")
@@ -437,6 +438,9 @@ class SotwMixin:
 
     async def sotw_channel_id(self) -> int:
         raw = await self.store.get("sotw:channel")
+        if raw and int(raw) == OLD_TEST_CHANNEL:  # moved from testing to the real channel
+            await self.store.set("sotw:channel", "")
+            raw = ""
         return int(raw) if raw else SOTW_CHANNEL_ID
 
     async def sotw_competition_id(self) -> int:
@@ -467,6 +471,7 @@ class SotwMixin:
             cid = comp["id"] if comp else await self.sotw_competition_id()
             chid = await self.sotw_channel_id()
             ch = self.get_channel(chid) or await self.fetch_channel(chid)
+            await self.sotw_clean_old_channels(chid)
             rank_key = f"sotw:ranks:{cid}"
             try:
                 prev = json.loads(await self.store.get(rank_key) or "{}")
@@ -494,8 +499,42 @@ class SotwMixin:
                     pass
             msg = await ch.send(embeds=embeds, view=view)
             await self.store.set(key, str(msg.id))
+        except discord.Forbidden as e:
+            log.warning("Skill of the Week: no permission in the channel (%s)", e)
+            await self.sotw_tell_owner(
+                "\u26A0\uFE0F I can't post the Skill of the Week board in "
+                f"<#{await self.sotw_channel_id()}>. Give TradingCow **View Channel**, **Send Messages** and "
+                "**Embed Links** there, then press Refresh now in /sotw_settings.")
         except Exception:
             log.exception("Skill of the Week refresh failed")
+
+    async def sotw_clean_old_channels(self, current: int) -> None:
+        """When the board moves channel, delete the board left behind in the old one."""
+        last = await self.store.get("sotw:last_channel")
+        if not last and await self.store.get(f"sotw:msg:{OLD_TEST_CHANNEL}"):
+            last = str(OLD_TEST_CHANNEL)  # boards posted before this was tracked lived in the test channel
+        if last and int(last) != current:
+            old_id = await self.store.get(f"sotw:msg:{last}")
+            if old_id:
+                try:
+                    old_ch = self.get_channel(int(last)) or await self.fetch_channel(int(last))
+                    await (await old_ch.fetch_message(int(old_id))).delete()
+                except discord.HTTPException:
+                    pass
+                await self.store.set(f"sotw:msg:{last}", "")
+        if last != str(current):
+            await self.store.set("sotw:last_channel", str(current))
+
+    async def sotw_tell_owner(self, text: str) -> None:
+        if await self.store.get("sotw:warned") == text:
+            return  # warn once, not every hour
+        try:
+            app = await self.application_info()
+            owner = app.team.owner if app.team and app.team.owner else app.owner
+            await owner.send(text)
+            await self.store.set("sotw:warned", text)
+        except Exception:
+            pass
 
     @tasks.loop(hours=1)
     async def sotw_loop(self) -> None:
