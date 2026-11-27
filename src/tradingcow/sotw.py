@@ -22,6 +22,7 @@ from discord import app_commands
 from discord.ext import tasks
 
 from .quest_comp import AdminsView, admin_only, admins_text
+from .sotw_tracker import Tracker
 
 log = logging.getLogger("tradingcow.sotw")
 
@@ -177,7 +178,9 @@ def board_embeds(comp: dict | None, label: str, prizes: list[str], banner: str,
                          color=COLOR, description=desc[:4096])
     if banner:
         head.set_image(url=banner)
-    head.set_footer(text=f"Updated {datetime.now(TZ).strftime('%d %b %H:%M')} Amsterdam time \u00b7 data from Wise Old Man")
+    source = ("official hiscores (Wise Old Man is unreachable, backup tracking)" if comp.get("backup")
+              else "Wise Old Man")
+    head.set_footer(text=f"Updated {datetime.now(TZ).strftime('%d %b %H:%M')} Amsterdam time \u00b7 data from {source}")
 
     board = discord.Embed(title="Leaderboard", color=COLOR)
     places = max(PRIZE_PLACES or len(prizes), 1)
@@ -233,13 +236,29 @@ class RsnModal(discord.ui.Modal):
         await interaction.response.defer(ephemeral=True, thinking=True)
         cid = await bot.sotw_competition_id()
         if self.action == "update":
-            ok, err = await bot.wom.update_player(name)
+            try:
+                ok, err = await bot.wom.update_player(name)
+            except Exception as e:
+                ok, err = False, str(e)
             if not ok:
-                await interaction.followup.send(f"Wise Old Man couldn't update **{name}**: {err}", ephemeral=True)
-                return
+                # Wise Old Man down: read the official hiscores for this player instead
+                try:
+                    meta = await bot.sotw_tracker.meta(cid)
+                    xp = await bot.sotw_tracker.player_xp(name, meta["metric"]) if meta else None
+                except Exception:
+                    xp = None
+                if xp is None:
+                    await interaction.followup.send(f"Couldn't update **{name}** right now ({err}). Try again later.",
+                                                    ephemeral=True)
+                    return
+                await bot.store.conn.execute("INSERT INTO sotw_xp(competition, username, ts, xp) VALUES (?,?,?,?)",
+                                             (cid, name, int(time.time()), xp))
+                await bot.store.conn.commit()
             bot.wom.cache.pop(cid, None)
         try:
-            comp = await bot.wom.competition(cid, max_age=0 if self.action == "update" else 60)
+            comp = await bot.sotw_pick()
+            if comp is None:
+                raise RuntimeError("the competition isn't on Wise Old Man yet")
         except Exception as e:
             await interaction.followup.send(f"Couldn't reach Wise Old Man: {e}", ephemeral=True)
             return
@@ -276,7 +295,7 @@ class SotwView(discord.ui.View):
     async def full(self, interaction: discord.Interaction, _b: discord.ui.Button) -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
         bot = interaction.client
-        comp = await bot.wom.competition(await bot.sotw_competition_id())
+        comp = await bot.sotw_pick() or {"participations": []}
         rows = [r for r in standings(comp) if r["gained"] > 0]
         lines = [f"`{i + 1:>3}.` {r['name']}: {fmt_xp(r['gained'])}" for i, r in enumerate(rows)]
         text = "\n".join(lines) or "Nobody has gained XP yet."
@@ -430,7 +449,22 @@ class SotwMixin:
         self.wom = WOM()
         self.add_view(SotwView())
         self.tree.add_command(sotw_settings_cmd)
+        self.sotw_tracker = Tracker(self.store, self.wom._s)
+        await self.sotw_tracker.setup()
         self.sotw_loop.start()
+        self.sotw_snap_loop.start()
+
+    @tasks.loop(minutes=30)
+    async def sotw_snap_loop(self) -> None:
+        """Backup: read everyone's XP from the official hiscores, in case Wise Old Man goes down."""
+        try:
+            await self.sotw_tracker.snapshot(await self.sotw_competition_id())
+        except Exception:
+            log.exception("SOTW backup snapshot failed")
+
+    @sotw_snap_loop.before_loop
+    async def _sotw_snap_wait(self) -> None:
+        await self.wait_until_ready()
 
     async def sotw_setting(self, key: str, default: str) -> str:
         raw = await self.store.get(f"sotw:{key}")
@@ -462,7 +496,14 @@ class SotwMixin:
             if newest["id"] != cid:
                 await self.store.set("sotw:competition", str(newest["id"]))
                 cid = newest["id"]
-        comp = await self.wom.competition(cid)
+        try:
+            comp = await self.wom.competition(cid)
+            await self.sotw_tracker.remember(comp)
+        except Exception as e:
+            log.warning("Wise Old Man unreachable (%s), using the hiscores backup", e)
+            comp = await self.sotw_tracker.competition(cid)
+            if comp is None:
+                raise
         return comp if comp.get("metric") == label else None
 
     async def sotw_refresh(self, repost: bool = False) -> None:

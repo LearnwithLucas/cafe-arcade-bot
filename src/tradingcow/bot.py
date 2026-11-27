@@ -158,12 +158,13 @@ class TradingCow(QuestCompMixin, SotwMixin, commands.Bot):
         self.backfill_task = asyncio.create_task(self.backfill())
 
     async def close(self) -> None:
-        for loop in (self.price_loop, self.hour_loop, self.dump_loop, self.board_loop, self.guide_loop, self.qc_loop, self.sotw_loop):
+        for loop in (self.price_loop, self.hour_loop, self.dump_loop, self.board_loop, self.guide_loop, self.qc_loop, self.sotw_loop, self.sotw_snap_loop):
             loop.cancel()
         if self.backfill_task:
             self.backfill_task.cancel()
         await self.wiki.close()
         await self.wom.close()
+        await self.sotw_tracker.close()
         await self.store.close()
         await super().close()
 
